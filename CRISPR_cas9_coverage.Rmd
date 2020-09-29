@@ -1,0 +1,686 @@
+---
+title: "CRISPR cas9 coverage"
+author: "Marcus Davy"
+date: "12/13/2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(RLinuxModules)
+library(Rsamtools)
+library(lattice)
+library(rtracklayer)
+library(testthat)
+
+rm(list=ls())
+
+module("purge")
+module("load samtools/1.9")
+
+use_corrected_canu <- FALSE
+plot_kripr_oligos  <- TRUE
+
+if(use_corrected_canu) {
+  ## New corrected canu bam files
+  guppy_bam    <- "/workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/04.canu/minimap/correct_reads_to_GD/Guppy_canu_corrected_vs_GDv1.1.bam"
+  albacore_bam <- "/workspace/hrpelg/Red_Flesh_ON/04.canu/minimap/correct_reads_to_GD/canu_corrected_vs_GDv1.1.bam"
+} else {
+  ## Original bam files
+  guppy_bam    <- "/workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/03.minimap2/Guppy_RedFlesh.bam"
+  albacore_bam <- "/workspace/hrpelg/Red_Flesh_ON/03.minimap2/Redflesh.bam"
+}
+
+guppy_bam    <- "/workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/03.minimap2/Guppy_RedFlesh.bam"
+albacore_bam <- "/workspace/hrpelg/Red_Flesh_ON/03.minimap2/Redflesh.bam"
+ref_gd       <- "/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta"
+
+Sys.setenv(GUPPY_BAM=guppy_bam,
+           ALBACORE_BAM=albacore_bam,
+           REFERENCE=ref_gd)
+
+source("functions.R")
+```
+
+
+## Metadata
+
+MYB10 coordinates;
+
+```{r myb10_coords}
+myb10_coords <- import(Sys.getenv("BEDFILE"), format="bed")
+print(myb10_coords)
+```
+
+Checking crRNA alignments to Golden delicious genome;
+
+```{r crRNA_matches}
+# crRNA genome coordinates;
+patterns <- krispr_rna_oligos()
+ref      <- readDNAStringSet(Sys.getenv("REFERENCE"))
+
+## Sequence matching
+mindex1 <- vmatchPattern(patterns[[1]], ref)$Chr09
+mindex2 <- vmatchPattern(patterns[[2]], ref)$Chr09
+mindex3 <- vmatchPattern(reverseComplement(patterns[[3]]), ref)$Chr09
+mindex4 <- vmatchPattern(patterns[[4]], ref)$Chr09
+
+cat(paste("[", names(patterns[1]), "forward matches ])\n"))
+print(mindex1)
+
+cat(paste("[", names(patterns[2]), "forward matches ])\n"))
+print(mindex2)
+
+cat(paste("[", names(patterns[3]), " reverse complement matches ])\n"))
+print(mindex3)
+
+cat(paste("[", names(patterns[4]), "forward matches ])\n"))
+print(mindex4)
+```
+
+## Checking mapping quality
+
+```{r mapping_quality}
+
+## GRanges from baits coordinates
+# which <- import(Sys.getenv("BEDFILE"))
+chr9_size <- width(readDNAStringSet("/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta")["Chr09"])
+
+sinfo <- Seqinfo("Chr09", chr9_size, FALSE, "Golden Delicious")
+which <- GRanges(seqnames = "Chr09", IRanges(start=35542701, end=35551878), seqinfo=sinfo)
+
+param <- ScanBamParam(what=scanBamWhat(), which=which,
+                      flag=scanBamFlag(isUnmappedQuery=FALSE))
+x <- scanBam(Sys.getenv("GUPPY_BAM"), param=param)
+
+##  names(x[[1]])
+cat("[ Guppy mapping quality ]")
+table(x[[1]]["mapq"])
+
+param <- ScanBamParam(what=scanBamWhat(), which=which,
+                      flag=scanBamFlag(isUnmappedQuery=FALSE))
+x <- scanBam(Sys.getenv("ALBACORE_BAM"), param=param)
+
+##  names(x[[1]])
+cat("[ Albacore mapping quality ]")
+table(x[[1]]["mapq"])
+```
+
+## Validating experimental coverage
+
+We know that the [ont_tutorial_cas9 coverage plots](https://github.com/nanoporetech/ont_tutorial_cas9/issues/6) contain an error in them. We can check what the underlying data coverage is from the bam and bed files.
+
+The bed coordinates are;
+
+```
+09 35542701 35551878 
+```
+
+which relates to the coordinate system `Chr9:35542701-35551878`.
+
+## Bam files
+
+There are two bam files;
+
+```{r engine="bash"}
+ls -l $ALBACORE_BAM
+ls -l $GUPPY_BAM
+```
+
+
+## Checking the depth in samtools
+
+```{r samtools_stats, engine="bash"}
+echo "[ GUPPY DEPTH ]"
+samtools depth -r Chr09:35542701-35551878 $GUPPY_BAM | head
+echo "[ GUPPY REGION SIZE ]"
+samtools depth -r Chr09:35542701-35551878 $GUPPY_BAM | wc -l
+echo "[ GUPPY # ALIGNMENTS ]"
+samtools view -c $GUPPY_BAM Chr09:35542701-35551878
+
+echo "[ ALBACORE DEPTH ]"
+samtools depth -r Chr09:35542701-35551878 $ALBACORE_BAM | head
+echo "[ GUPPY REGION SIZE ]"
+samtools depth -r Chr09:35542701-35551878 $ALBACORE_BAM | wc -l
+echo "[ ALBACORE # ALIGNMENTS ]"
+samtools view -c $ALBACORE_BAM Chr09:35542701-35551878
+```
+
+
+## Extracting coverage
+
+Using Rsamtools to extract coverage information from the bam files, note: no flag filtering is currently used to remove poor quality reads. 
+
+```{r extract_cov1}
+bamfile1 <- Sys.getenv("GUPPY_BAM")
+bamfile2 <- Sys.getenv("ALBACORE_BAM")
+
+system.time(guppy_all    <- bamCoverage(1, myb10_coords, bamfile1))
+system.time(albacore_all <- bamCoverage(1, myb10_coords, bamfile2))
+system.time(guppy_fwd    <- bamCoverage(1, myb10_coords, bamfile1, orient="fwd"))
+system.time(albacore_fwd <- bamCoverage(1, myb10_coords, bamfile2, orient="fwd"))
+system.time(guppy_rev    <- bamCoverage(1, myb10_coords, bamfile1, orient="revcomp"))
+system.time(albacore_rev <- bamCoverage(1, myb10_coords, bamfile2, orient="revcomp"))
+```
+
+## Generating coverage dataset
+
+```{r cov_to_df}
+dat1 <- data.frame(
+  pos       = seq(length(guppy_all$cov)) + guppy_all$start - 1,
+  coverage  = as.integer(guppy_all$cov),
+  type      = "Guppy",
+  orient    = "all"
+)
+
+dat2 <- data.frame(
+  pos       = seq(length(albacore_all$cov)) + albacore_all$start - 1,
+  coverage  = as.integer(albacore_all$cov),
+  type      = "Albercore",
+  orient    = "all"
+)
+
+dat3 <- data.frame(
+  pos       = seq(length(guppy_fwd$cov)) + guppy_fwd$start - 1,
+  coverage  = as.integer(guppy_fwd$cov),
+  type      = "Guppy",
+  orient    = "forward"
+)
+
+dat4 <- data.frame(
+  pos       = seq(length(albacore_fwd$cov)) + albacore_fwd$start - 1,
+  coverage  = as.integer(albacore_fwd$cov),
+  type      = "Albercore",
+  orient    = "forward"
+)
+
+dat5 <- data.frame(
+  pos       = seq(length(guppy_rev$cov)) + guppy_rev$start - 1,
+  coverage  = as.integer(guppy_rev$cov),
+  type      = "Guppy",
+  orient    = "reverse complement"
+)
+
+dat6 <- data.frame(
+  pos       = seq(length(albacore_rev$cov)) + albacore_rev$start - 1,
+  coverage  = as.integer(albacore_rev$cov),
+  type      = "Albercore",
+  orient    = "reverse complement"
+)
+
+## Forward difference
+cov1 <- guppy_fwd
+cov2 <- albacore_fwd
+
+if(length(cov2$cov) == length(cov1$cov)) {
+  delta_start <- cov2$start
+}
+
+if(length(cov2$cov) < length(cov1$cov)) {
+  toPad <- rep(0, abs(length(cov2$cov) - length(cov1$cov)))
+  cov2$cov <- append(cov2$cov, toPad)
+  delta_start <- cov2$start
+}
+
+if(length(cov1$cov) < length(cov2$cov)) {
+  toPad <- rep(0, abs(length(cov2$cov) - length(cov1$cov)))
+ cov1$cov <- append(cov1$cov, toPad)
+ delta_start <- cov1$start
+}
+
+delta <-  cov1$cov - cov2$cov
+
+dat7 <- data.frame(
+  pos       = seq(length(delta)) + delta_start - 1,
+  coverage  = as.integer(delta),
+  type      = "Guppy-Albacore",
+  orient    = "forward"
+)
+
+## Reverse complement difference
+cov1 <- guppy_rev
+cov2 <- albacore_rev
+
+if(length(cov2$cov) == length(cov1$cov)) {
+  delta_start <- cov2$start
+}
+
+
+if(length(cov2$cov) < length(cov1$cov)) {
+  toPad <- rep(0, abs(length(cov2$cov) - length(cov1$cov)))
+  cov2$cov <- append(cov2$cov, toPad)
+  delta_start <- cov2$start
+}
+
+if(length(cov1$cov) < length(cov2$cov)) {
+  toPad <- rep(0, abs(length(cov2$cov) - length(cov1$cov)))
+ cov1$cov <- append(cov1$cov, toPad)
+ delta_start <- cov1$start
+}
+
+delta <-  cov1$cov - cov2$cov
+dat8 <- data.frame(
+  pos       = seq(length(delta)) + delta_start - 1,
+  coverage  = as.integer(delta),
+  type      = "Guppy-Albacore",
+  orient    = "reverse complement"
+)
+
+dat <- rbind(dat3, dat4, dat5, dat6, dat7, dat8)
+```
+
+
+Visualizing coverage
+
+```{r paper_cov}
+if(use_corrected_canu) {
+  xmin <- min(dat$pos) - 6355
+  xmax <- max(dat$pos) + 37
+} else {
+  xmin <- min(dat$pos) ## 35536363
+  xmax <- max(dat$pos) ## 35556652
+}
+
+xyplot(coverage ~ pos | type, data=dat, xlab="Physical position on Chr09", ylab="Coverage", aspect=1,
+       groups=orient, between=list(x=0.3, y=0.3), main=which_coords(myb10_coords), xlim = c(xmin, xmax),
+       key = simpleKey(text = c("Forward", "Reverse"), 
+            columns = 2, space = "top", lines=TRUE, points=FALSE),
+       scales=list(alternating=FALSE), panel=function(x,y, ...) {
+         panel.abline(v = start(myb10_coords), col = "darkgrey", lty = 3)
+         panel.abline(v = end(myb10_coords),   col = "darkgrey", lty = 3)
+
+         if(plot_kripr_oligos) {
+           panel.abline(v = start(mindex1), col = "red",   lty = 3, cex = 0.9)
+           panel.abline(v = start(mindex2), col = "green", lty = 3, cex = 0.9)
+           panel.abline(v = start(mindex3), col = "green", lty = 3, cex = 0.9)
+           panel.abline(v = start(mindex4), col = "red",   lty = 3, cex = 0.9)
+         }
+
+         panel.superpose(x,y, type="l", ...)
+       })
+
+## Sanity check start positions
+const <- 30
+guppy_fwd$start + min(which(guppy_fwd$cov>const))
+guppy_rev$start + min(which(guppy_rev$cov>const))
+albacore_fwd$start + min(which(albacore_fwd$cov>const))
+albacore_rev$start + min(which(albacore_rev$cov>const))
+
+## Sanity check end positions
+const <- 20
+guppy_fwd$end + max(which(guppy_fwd$cov>const))
+guppy_rev$end + max(which(guppy_rev$cov>const))
+albacore_fwd$end + max(which(albacore_fwd$cov>const))
+albacore_rev$end + max(which(albacore_rev$cov>const))
+```
+
+## Plotting coverage
+
+Guppy coverage;
+
+```{r guppy_fwd 1}
+min_const <- 3
+tweak     <- 2
+plot(seq(guppy_all$start, length=length(guppy_all$cov)), guppy_all$cov, type="l", 
+     ylim=c(min(guppy_all$cov)-min_const, max(guppy_all$cov)),
+     xlab="Coord", ylab="Coverage", 
+     main=paste("Guppy MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(guppy_fwd$cov)-min_const, end(mindex1), min(guppy_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(guppy_fwd$cov)-min_const, end(mindex2), min(guppy_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(guppy_fwd$cov)-min_const, end(mindex3), min(guppy_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(guppy_fwd$cov)-min_const, end(mindex4), min(guppy_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Albacore coverage;
+
+```{r albacore_fwd1}
+min_const <- 3
+tweak     <- 2
+plot(seq(albacore_all$start, length=length(albacore_all$cov)), albacore_all$cov, type="l", 
+     ylim=c(min(guppy_all$cov)-min_const, max(albacore_all$cov)), 
+     xlab="Coord", ylab="Coverage", 
+     main=paste("Albacore MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(albacore_fwd$cov)-min_const, end(mindex1), min(albacore_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(albacore_fwd$cov)-min_const, end(mindex2), min(albacore_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(albacore_fwd$cov)-min_const, end(mindex3), min(albacore_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(albacore_fwd$cov)-min_const, end(mindex4), min(albacore_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Difference in coverage between Guppy and Albacore, the parametrization is (Guppy - Albacore) because Guppy is a newer base caller;
+
+```{r diff_cov1}
+min_const <- 3
+tweak     <- 2
+## Difference
+if(length(albacore_all$cov) < length(guppy_all$cov)) {
+  toPad <- rep(0, abs(length(albacore_all$cov) - length(guppy_all$cov)))
+  albacore_all$cov <- append(albacore_all$cov, toPad)
+}
+
+if(length(guppy_all$cov) < length(albacore_all$cov)) {
+  toPad <- rep(0, abs(length(albacore_all$cov) - length(guppy_all$cov)))
+ guppy_all$cov <- append(guppy_all$cov, toPad)
+}
+
+delta <-  guppy_all$cov - albacore_all$cov
+plot(seq(albacore_all$start, length=length(albacore_all$cov)), delta, type="l", 
+     ylim=c(min(delta)-10, max(delta)),
+     xlab="Coord", ylab="Coverage", main=paste("Difference: Guppy - Albacore ",  which_coords(myb10_coords)))
+abline(h=0, lty=3, col="red")
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(delta)-min_const, end(mindex1), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(delta)-min_const, end(mindex2), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(delta)-min_const, end(mindex3), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(delta)-min_const, end(mindex4), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+When the trace is above zero, it means guppy coverage is consistently higher than Albacore coverage, in the above plot by approximately 8X coverage depth.
+
+Note: There are two spike regions which are of interest, these are regions where one caller or the other has problems. The first suggests Guppy does better job base calling, the second suggests albacore is better at calling the region since it is negative.
+
+Let look at these two spike regions in more detail;
+
+
+```{r regions}
+## First region
+ind1 <- which(((albacore_all$cov - guppy_all$cov) < -81)==TRUE)
+
+spike1 <- IRanges(ind1+albacore_all$start, width=1)+39
+
+Sys.setenv(SPIKE1S=min(start(spike1)))
+Sys.setenv(SPIKE1E=max(end(spike1)))
+
+## Second region
+ind2 <- which(((albacore_all$cov - guppy_all$cov) > 25)==TRUE)
+
+spike2 <- IRanges(ind2+albacore_all$start, width=1)+39
+
+Sys.setenv(SPIKE2S=min(start(spike2)))
+Sys.setenv(SPIKE2E=max(end(spike2)))
+```
+
+
+Visualizing first spike using `samtools tview`;
+
+```{r tview_region1, engine="bash"}
+echo samtools tview -d T -p Chr09:$SPIKE1S-$SPIKE1E $ALBACORE_BAM $REF
+samtools tview -d T -p Chr09:$SPIKE1S-$SPIKE1E $ALBACORE_BAM $REF
+```
+
+
+Visualizing second spike using `samtools tview`;
+
+```{r tview_region2, engine="bash"}
+echo samtools tview -d T -p Chr09:$SPIKE2S-$SPIKE1E $ALBACORE_BAM $REF
+samtools tview -d T -p Chr09:$SPIKE2S-$SPIKE2E $ALBACORE_BAM $REF
+```
+
+
+## Fwd read coverage only
+
+## Plotting forward read coverage
+
+Guppy coverage;
+
+```{r guppy_fwd 2}
+min_const <- 3
+tweak     <- 2
+plot(seq(guppy_fwd$start, length=length(guppy_fwd$cov)), guppy_fwd$cov, type="l", 
+     ylim=c(min(guppy_fwd$cov)-min_const, max(guppy_fwd$cov)),
+     xlab="Coord", ylab="Forward Coverage", 
+     main=paste("Guppy MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(guppy_fwd$cov)-min_const, end(mindex1), min(guppy_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(guppy_fwd$cov)-min_const, end(mindex2), min(guppy_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(guppy_fwd$cov)-min_const, end(mindex3), min(guppy_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(guppy_fwd$cov)-min_const, end(mindex4), min(guppy_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Albacore coverage;
+
+```{r albacore_fwd2}
+min_const <- 3
+tweak     <- 2
+plot(seq(albacore_fwd$start, length=length(albacore_fwd$cov)), albacore_fwd$cov, type="l", 
+     ylim=c(min(guppy_fwd$cov)-min_const, max(albacore_fwd$cov)), 
+     xlab="Coord", ylab="Forward Coverage", 
+     main=paste("Albacore MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(albacore_fwd$cov)-min_const, end(mindex1), min(albacore_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(albacore_fwd$cov)-min_const, end(mindex2), min(albacore_fwd$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(albacore_fwd$cov)-min_const, end(mindex3), min(albacore_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(albacore_fwd$cov)-min_const, end(mindex4), min(albacore_fwd$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Difference in coverage between Guppy and Albacore ;
+
+```{r diff_cov2}
+min_const <- 3
+tweak     <- 2
+## Difference
+if(length(albacore_fwd$cov) < length(guppy_fwd$cov)) {
+  toPad <- rep(0, abs(length(albacore_fwd$cov) - length(guppy_fwd$cov)))
+  albacore_fwd$cov <- append(albacore_fwd$cov, toPad)
+}
+
+if(length(guppy_fwd$cov) < length(albacore_fwd$cov)) {
+  toPad <- rep(0, abs(length(albacore_fwd$cov) - length(guppy_fwd$cov)))
+ guppy_fwd$cov <- append(guppy_fwd$cov, toPad)
+}
+
+delta <-  guppy_fwd$cov - albacore_fwd$cov
+plot(seq(albacore_fwd$start, length=length(albacore_fwd$cov)), delta, type="l", 
+     ylim=c(min(delta)-10, max(delta)),
+     xlab="Coord", ylab="Forward Coverage", main=paste("Difference: Guppy - Albacore ",  which_coords(myb10_coords)))
+abline(h=0, lty=3, col="red")
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(delta)-min_const, end(mindex1), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(delta)-min_const, end(mindex2), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(delta)-min_const, end(mindex3), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(delta)-min_const, end(mindex4), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+Forward reads are still positively biased between Guppy and Albacore.
+
+
+## Reverse complement read coverage only
+
+## Plotting reverse complement read coverage
+
+Guppy coverage;
+
+```{r guppy_fwd 3}
+min_const <- 3
+tweak     <- 2
+plot(seq(guppy_rev$start, length=length(guppy_rev$cov)), guppy_rev$cov, type="l", 
+     ylim=c(min(guppy_rev$cov)-min_const, max(guppy_rev$cov)),
+     xlab="Coord", ylab="Reverse Complement Coverage", 
+     main=paste("Guppy MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(guppy_rev$cov)-min_const, end(mindex1), min(guppy_rev$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(guppy_rev$cov)-min_const, end(mindex2), min(guppy_rev$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(guppy_rev$cov)-min_const, end(mindex3), min(guppy_rev$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(guppy_rev$cov)-min_const, end(mindex4), min(guppy_rev$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Albacore coverage;
+
+```{r albacore_rev3}
+min_const <- 3
+tweak     <- 2
+plot(seq(albacore_rev$start, length=length(albacore_rev$cov)), albacore_rev$cov, type="l", 
+     ylim=c(min(guppy_rev$cov)-min_const, max(albacore_rev$cov)), 
+     xlab="Coord", ylab="Reverse Complement Coverage", 
+     main=paste("Albacore MYB10 region",  which_coords(myb10_coords)))
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(albacore_rev$cov)-min_const, end(mindex1), min(albacore_rev$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(albacore_rev$cov)-min_const, end(mindex2), min(albacore_rev$cov)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(albacore_rev$cov)-min_const, end(mindex3), min(albacore_rev$cov)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(albacore_rev$cov)-min_const, end(mindex4), min(albacore_rev$cov)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+
+Difference in coverage between Guppy and Albacore ;
+
+```{r diff_cov3}
+min_const <- 3
+tweak     <- 2
+## Difference
+if(length(albacore_rev$cov) < length(guppy_rev$cov)) {
+  toPad <- rep(0, abs(length(albacore_rev$cov) - length(guppy_rev$cov)))
+  albacore_rev$cov <- append(albacore_rev$cov, toPad)
+}
+
+if(length(guppy_rev$cov) < length(albacore_rev$cov)) {
+  toPad <- rep(0, abs(length(albacore_rev$cov) - length(guppy_rev$cov)))
+ guppy_rev$cov <- append(guppy_rev$cov, toPad)
+}
+
+delta <-  guppy_rev$cov - albacore_rev$cov
+plot(seq(albacore_rev$start, length=length(albacore_rev$cov)), delta, type="l", 
+     ylim=c(min(delta)-10, max(delta)),
+     xlab="Coord", ylab="Reverse Complement Coverage", main=paste("Difference: Guppy - Albacore ",  which_coords(myb10_coords)))
+abline(h=0, lty=3, col="red")
+abline(v = start(myb10_coords), col="blue", lty=3)
+abline(v = end(myb10_coords),   col="blue", lty=3)
+lwd_width <- 1.5
+rect(start(mindex1), min(delta)-min_const, end(mindex1), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex2), min(delta)-min_const, end(mindex2), min(delta)-min_const-tweak, border="darkgreen", lwd=lwd_width)
+rect(start(mindex3), min(delta)-min_const, end(mindex3), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+rect(start(mindex4), min(delta)-min_const, end(mindex4), min(delta)-min_const-tweak, border="red", lwd=lwd_width)
+```
+
+Reverse complement difference is unbiased between Guppy and Albacore.
+
+
+
+
+
+## Scratchpad
+
+```{r}
+## Sanity check
+# These plots are incorrect because they do not adjust for the start of each Rle 
+library(chipseq)
+coverageplot(slice(guppy_fwd$cov), slice(guppy_rev$cov))
+coverageplot(slice(albacore_fwd$cov), slice(albacore_rev$cov))
+```
+
+
+Test Rsamtools;
+
+```{r test_coord}
+bamfile <- guppy_bam 
+
+coord <- "Chr09:35542701-35551878" 
+ind <- which(which_coords(myb10_coords)%in%coord)
+
+what  <- scanBamWhat()
+param <- ScanBamParam(which=myb10_coords[ind], what=what)
+y <- scanBam(bamfile, param=param)
+
+seqname <- names(y)
+x <- y[[seqname]]
+
+names(y)
+names(x)
+```
+
+
+Testing coverage;
+
+```{r test_coverage, echo=FALSE, include=FALSE}
+coord <- names(y)
+
+ir <- IRanges(x[["pos"]], width=x[["qwidth"]])
+
+## Test shift
+shift(ir, shift= -min(start(ir)) + 1)
+
+cir <- coverage(ir,
+                shift = -min(start(ir)) + 1)
+
+cir
+coverage(ir)
+
+expect_equal(min(x$pos), min(start(ir)))
+expect_equal(min(as.integer(cir)) + min(x$pos) - 1, min(start(ir)))
+expect_equal(min( seq(length(cir)) + min(start(ir)) -1 ), min(start(ir)))
+
+plot(seq(length(cir)) + min(start(ir)) - 1, cir,
+     xlab  = "genomic coordinate",
+     ylab  = "Coverage",
+     main  = coord,
+     type  = "l")
+
+x <- seq(length(guppy_all$cov)) + min(start(guppy_all$start)) - 1
+y <- as.integer(guppy_all$cov)
+
+xyplot(y ~ x, type="l")
+
+## Testing combining IRanges
+
+ir1 <- IRanges(start=5:30, width=40)
+ir2 <- IRanges(start=1:100, width=0)
+
+ir <- reduce(c(ir1, ir2))
+cov <- coverage(ir)
+
+plot(cov, type="l")
+
+
+#
+## Testing ScanBam 
+#
+
+##  what=scanBamWhat()
+## which=myb10_coords[1]
+
+param <- ScanBamParam(what=scanBamWhat(), ## c("rname","pos","strand", "qwidth", "mapq", "seq", "qual", "flag"),
+                      flag=scanBamFlag(isUnmappedQuery = FALSE))
+
+x <- scanBam(bamfile1, param=param)[[1]]
+
+sum(table(x$flag))
+
+length(x$qwidth)
+
+for(i in names(x)) {
+  cat("[", i, "]\n")
+  print(head(x[[i]]))
+}
+```
+
+
+```{r engine="bash"}
+module load htslib/1.9
+
+echo "[ Albacore gzips]"
+find /workspace/hrpelg/Red_Flesh_ON/02.poreChop/ -name "*.gz" -exec htsfile {} \;
+echo "[ Guppy gzips]"
+find /workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/02.poreChop/ -name "*.gz" -exec htsfile {} \;
+```
