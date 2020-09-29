@@ -1,0 +1,111 @@
+---
+title: "README.Rmd"
+author: "Marcus Davy"
+date: "4/24/2020"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysis for MYB10 enrichment
+
+
+* [CRISPR-Cas9 enrichment and long read sequencing for fine mapping in plant species](https://myiplant.plantandfood.co.nz/personal/hrpelg/_layouts/15/WopiFrame2.aspx?sourcedoc=%2Fpersonal%2Fhrpelg%2FDocuments%2FDS%5FDraft%5Fmanuscript%5FElena%5FLopez%2DGirona%2FMain%5FDraft%5Fmanuscript%5FDS%5FElena%2DLopez%2DGirona%5F18%2D04%2D2020%2Edocx&action=view&wdparaid=647F2B41)
+
+
+## Jupyter notebooks
+
+Alcabore2 notebook;
+
+* /workspace/hrpelg/Red_Flesh_ON/RedFlesh_ON_Cas9_enrichment_ON_run1.ipynb
+
+Guppy notebook;
+
+* /workspace/hrpelg/Red_Flesh_ON/Red_Flesh_ONT_type1_Guppy_basecall.ipynb
+
+Offtargets notebook;
+
+* /workspace/hrpelg/Red_Flesh_ON/Offtarget_Redflesh_cas9_analysis.ipynb
+
+_Using –F 260 to filter the bam files when getting the off targets list_
+
+
+## Original figure generation
+
+Figure 2;
+
+```bash
+module load nanopack/1.0.0
+
+WKDIR=/workspace/hrpelg/Red_Flesh_ON
+
+## Albacore2
+NanoPlot -c darkcyan  -f png --title Albacore2 --minqual 7 --N50 -p Albacore2_nanoplot --fastq $WKDIR/02.poreChop/All_DS_RedFlesh_ON_run1_cas_after_porechop_dis.fastq.gz /workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/02.poreChop/After_PoreCHOP_RedFlesh_ON_GUPPY_cas.fastq.gz -o $WKDIR/02.poreChop
+
+## Guppy
+NanoPlot -c pink -f tiff --title Guppy --N50 --minqual 7 -p Guppy_nanoplot --fastq $WKDIR/02.poreChop/After_PoreCHOP_RedFlesh_ON_GUPPY_cas.fastq.gz -o $WKDIR/02.poreChop
+```
+
+Figure 3;
+
+```bash
+WKDIR=/workspace/hrpelg/Red_Flesh_ON
+
+NanoComp -c darkcyan pink -p Albacore2_vs_Guppy_Canu_corrected_reads -o $WKDIR/02.poreChop/ --title Albacore2_vs_Guppy_reads -n Albacore2 Guppy --fastq /workspace/hrpelg/Red_Flesh_ON/02.poreChop/All_DS_RedFlesh_ON_run1_cas_after_porechop_dis.fastq.gz /workspace/hrpelg/Red_Flesh_ON/Guppy_basecalling/02.poreChop/After_PoreCHOP_RedFlesh_ON_GUPPY_cas.fastq.gz
+```
+
+Figure 5;
+
+R script;
+* /workspace/hrpelg/Red_Flesh_ON/04.canu/minimap/correct_reads_vs_canu_assembly/Coverage_plots_bedtools_corrected_reads_against_Canu_assembly_RedFlesLocus.R 
+
+```bash
+WKDIR=/workspace/hrpelg/Red_Flesh_ON
+
+bedtools coverage -a $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/Assembly.bed -b $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu.bam -bed -nonamecheck -d -s | gzip > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz
+
+ 
+
+bedtools coverage -a $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/Assembly.bed -b $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu.bam -bed -nonamecheck -d -S | gzip > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000001len=130229reads=87covStat=351.14gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000001.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000003len=17146reads=118covStat=-47.97gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000003.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000015len=14585reads=13covStat=37.92gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000015.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000017len=16132reads=15covStat=13.60gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000017.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000018len=8006reads=118covStat=-75.37gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000018.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000383len=7197reads=1covStat=0.00gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000383.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes.tsv.gz | awk '{if($1=="tig00000384len=7927reads=45covStat=-6.89gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_tig00000384.tsv.gz
+
+ 
+
+ 
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000001len=130229reads=87covStat=351.14gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000001.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000003len=17146reads=118covStat=-47.97gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000003.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000015len=14585reads=13covStat=37.92gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000015.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000017len=16132reads=15covStat=13.60gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000017.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000018len=8006reads=118covStat=-75.37gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000018.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000383len=7197reads=1covStat=0.00gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000383.tsv.gz
+
+gzip -dc $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand.tsv.gz | awk '{if($1=="tig00000384len=7927reads=45covStat=-6.89gappedBases=noclass=contigsuggestRepeat=nosuggestCircular=no") print$0}' > $WKDIR/04.canu/minimap/correct_reads_vs_canu_assembly/canu_correct_reads_vs_canu_assembly_all_chromosomes_other_strand_tig00000384.tsv.gz
+```
+
+## See also
+
+* [Similar publication](https://www.nature.com/articles/s41587-020-0407-5.pdf?draft=collection)
+
+You may check this specially R_script_to_makePLOTS
+* https://github.com/timplab/Cas9Enrichment
