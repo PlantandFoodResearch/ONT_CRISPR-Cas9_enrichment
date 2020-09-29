@@ -1,0 +1,170 @@
+---
+title: "ONT CRIPR-Cas9 enrichment workflow"
+author: "Marcus Davy, Elena Lopez-Girona"
+date: "5/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(RLinuxModules)
+
+# module("purge")
+
+module("load openlava/3.2")
+module("load asub/2.1")
+
+Sys.setenv(
+  INDIR1="/input/genomic/plant/Malus/OxfordNanopore/Red_flesh", 
+  WKDIR=file.path("/workspace", Sys.getenv("USER"), "github/analysis-workflows/Malus/Red_Flesh_ON")
+)
+
+```
+
+
+Albacore basecalling and QC
+===========================
+
+
+## Convert one to many fast5 files
+
+```{r engine="bash" }
+module load conda/4.8.2
+conda activate cflsjt_albacore
+
+mkdir -p $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/log 
+
+echo "[ albacore multi_to_single_fast5 version ]"
+multi_to_single_fast5 -v
+
+if [ ! -e "$WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/1/0007a1c5-4e4c-49f9-a3aa-d3f07aaee6b5.fast5" ]; then
+  time multi_to_single_fast5 -i $INDIR1 -s $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5
+fi
+
+ls -l $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5
+```
+
+_Note: Conda environment does not load using `RLinuxModules` -- use reticulate_
+
+
+## Base call intensities using albacore2
+
+```{r, engine="bash"}
+module load conda/4.8.2
+conda activate cflsjt_albacore
+
+THREADS=12
+# #mkdir -p $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/${i}
+if [ ! -e "$WKDIR/albacore2/Red_flesh_ON_run1_Cas9/0/workspace/pass" ]; then
+
+  for i in $(seq 0 1)
+  do
+    echo "read_fast5_basecaller.py -f FLO-MIN106 -k SQK-DCS108 -t $THREADS -s $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/${i} \
+-o fastq -q 100000 -i $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/${i}"
+  done | asub -n $THREADS -j $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/log
+
+else 
+
+  for i in $(seq 0 1)
+  do
+    echo "read_fast5_basecaller.py -f FLO-MIN106 -k SQK-DCS108 -t $THREADS -s $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/${i} \
+-o fastq -q 100000 -i $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/${i}"
+  done | asub -n $THREADS -j $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/log -p
+
+fi
+```
+
+## pycoQC
+
+```{r engine="bash"}
+module load conda/4.8.2
+conda activate cflsjt_albacore
+
+mkdir -p $WKDIR/00.Fastq
+mkdir -p $WKDIR/01.pycoQC/log
+
+cd $WKDIR/albacore2/Red_flesh_ON_run1_Cas9
+
+# for f in $(echo 0 1); do
+#  sed '1d' ${f}/sequencing_summary.txt > ${f}_summary.txt
+# done
+
+# head -n 1 0/sequencing_summary.txt > header
+# cat header *summary.txt > all_summary_run1.txt
+
+cat 0/sequencing_summary.txt       > all_summary_run1.txt
+sed '1d' 1/sequencing_summary.txt >> all_summary_run1.txt
+
+bsub -o $WKDIR/01.pycoQC/log/QC1.out -e $WKDIR/01.pycoQC/log/QC1.err -J ONT_QC1 \
+  pycoQC -f $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/all_summary_run1.txt -o $WKDIR/01.pycoQC/pycoQC_summary_run1.html
+```
+
+
+## NanoPlot summary
+
+```{r engine="bash"}
+## Conflicts with conda environment
+module load nanopack/1.0.0
+
+mkdir -p $WKDIR/02.NonoPlot/log
+
+NanoPlot --summary $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/all_summary_run1.txt --loglength -o $WKDIR/albacore2/mkdir -p $WKDIR/02.NonoPlot/summary-plots-log-transformed
+```
+
+
+Guppy basecalling and QC
+========================
+
+
+## Convert one to many fast5 files
+
+```{r engine="bash" }
+module load guppy/3.5.2
+
+# mkdir -p $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/log 
+
+# echo "[ albacore multi_to_single_fast5 version ]"
+# multi_to_single_fast5 -v
+
+# if [ ! -e "$WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5/1/0007a1c5-4e4c-49f9-a3aa-d3f07aaee6b5.fast5" ]; then
+#   time multi_to_single_fast5 -i $INDIR1 -s $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5
+# fi
+
+# ls -l $WKDIR/albacore2/Red_flesh_ON_run1_Cas9/single/fasta5
+
+mkdir -p $WKDIR/Guppy_basecalling/log
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J guppy
+#BSUB -o $WKDIR/Guppy_basecalling/log/guppy.out 
+#BSUB -e $WKDIR/Guppy_basecalling/log/guppy.err
+#BSUB -R "gpu"
+
+guppy_basecaller --input_path $INPUT --save_path $WKDIR/Guppy_basecalling/00.Fastq \
+--flowcell FLO-MIN106 --kit SQK-LSK109 -x "cuda:0"
+
+EOF
+```
+
+
+## See also
+
+Albacore base caller;
+
+* https://omictools.com/albacore-tool
+* https://github.com/dvera/albacore
+
+Oxford Nanopore;
+
+& https://github.com/nanoporetech/ont_fast5_api
+
+
+pycoQC;
+
+* https://github.com/a-slide/pycoQC
+
+Tutorials;
+
+* https://pypi.org/project/ont-fast5-api/
