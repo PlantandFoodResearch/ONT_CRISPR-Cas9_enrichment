@@ -1,0 +1,2124 @@
+---
+title: "ANU_X2250_Guppy_Promethion"
+author: "Elena LG"
+date: "5/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('/software/OSutils/modules-4.7.1/init/r.R')
+module("purge")
+module('load powerPlant/core git/2.21.0 texlive/20151117')
+module("load openlava/3.2")
+```
+
+#MiniONQC check fastq5 of the run
+```{bash, engine.opts='-l'}
+
+workDir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/MinIONQ/log
+output=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/MinIONQ
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J MinIONQ_X2250
+#BSUB -o $output/log/MinIONQC.log
+#BSUB -e $output/log/MinIONQC.err
+#BSUB -n 2
+#BSUB -R "span[hosts=1]"
+
+
+module load R/3.6.3
+Rscript /workspace/hrpelg/programs/MinIONQC.R -s TRUE -p 2 -i $workDir/sequencing_summary.txt -o $output 
+
+EOF
+
+```
+#Show some plots of Q and lenght of reads 
+
+
+
+#Basecall with guppy 5.0.7
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/log
+logDir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/log
+fast5Dir=/input/genomic/plant/Malus/ER10815/X2250/20210427_0709_3H_PAG01949_dad85680/fast5_pass
+workDir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J guppy_X2250
+#BSUB -o $logDir/01_guppy.log 
+#BSUB -e $logDir/01_guppy.err
+#BSUB -R "gpu"
+
+module load guppy/5.0.7
+guppy_basecaller -c dna_r9.4.1_450bps_sup_prom.cfg --input_path $fast5Dir --compress_fastq --save_path $workDir -x "cuda:0"
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+#Check how much data made it to the pass folder (quality thershold for guppy 5.0.7 sup model is 10)
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass
+du -h ./ 
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/fail
+du -h ./
+
+```
+
+# Move all log files to a single folder
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/guppy_log_files
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/
+mv *.log /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/guppy_log_files
+```
+#Merge all the fastq
+```{bash, engine.opts='-l'}
+
+module load htslib/1.7
+
+fastq=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass
+workDir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/
+
+bsub -o $workDir/merge.log -e $workDir/merge.err -J merge -n 4 -R "span[hosts=1]" \
+"cat $fastq/*.fastq.gz > $fastq/All_Promethium_X2250_reads.fastq.gz"
+
+```
+#Check quality of fastq reads 
+```{bash, engine.opts='-l'}
+module load nanopack/1.0.0
+workDir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads
+fastq=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/01_Nanoplots/log
+nanoplot_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/01_Nanoplots
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J nanoplots
+#BSUB -o $nanoplot_dir/log/nanoplot.log
+#BSUB -e $nanoplot_dir/log/nanoplot.err
+#BSUB -n 2
+#BSUB -R "span[hosts=1]"
+
+
+#summary of the basecalling 
+
+NanoPlot -t 2 --summary $workDir/sequencing_summary.txt -o $nanoplot_dir
+
+#summary after trimming adapters
+
+NanoPlot -t 2 -c green -f tiff --title X2250_Guppy --N50 -p Guppy_nanoplot_reads -o $nanoplot_dir --fastq $fastq/All_Promethium_X2250_reads.fastq.gz --plots hex dot --maxlength 100000
+
+
+EOF
+
+```
+
+#Mapping the fastq to reference genome
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+FQ=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/02.minimap2/log
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/02.minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq.gz
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J minimap2
+#BSUB -o $map_dir/log/minimap2.out 
+#BSUB -e $map_dir/log/minimap2.err
+#BSUB -n 8
+#BSUB -R "span[hosts=1]"
+
+minimap2 -ax map-ont -t 8 $FQ $input | \
+samtools view -Su - | samtools sort - -o $map_dir/Promethium_X2250_reads_vs_GDDHV1.1.bam
+samtools index $map_dir/Promethium_X2250_reads_vs_GDDHV1.1.bam
+samtools depth $map_dir/Promethium_X2250_reads_vs_GDDHV1.1.bam > $map_dir/Promethium_X2250_reads_vs_GDDHV1.1.bam.coverage
+
+EOF
+```
+#De novo assembly: Run last version of Flye 2.8.3
+
+```{bash, engine.opts='-l'}
+module load flye/2.8.3
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/log
+flye_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq.gz
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J flye_raw
+#BSUB -o $flye_dir/log/flye2.out 
+#BSUB -e $flye_dir/log/flye2.err
+#BSUB -n 80
+#BSUB -R "span[hosts=1]"
+
+flye --nano-raw $input -t 80 -g 1.5G -i 1 --keep-haplotypes -o $flye_dir
+
+EOF
+```
+
+
+
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/BUSCO/log
+# https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/BUSCO
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assembly.fasta
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_flye_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load BUSCO/v5.1.2
+
+cd $dir
+busco -c 20 -f -i $genome -o X2250_BUSCO_test_embryophyta_flye_1500Mb -l embryophyta_odb10 -m genome
+
+EOF
+```
+
+###Assemblathon### for the Flye_keep haplotype assembly 1.5G
+
+```{bash, engine.opts='-l'}
+
+#mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assemblathon/log
+
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assembly.fasta
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assemblathon
+
+#assemblathon_stats.pl -n 1 -genome_size 1500000000 $assembly > X2250_assemblathon_flye.txt
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> extend_X2250_assemblathon_flye.txt
+
+
+less /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assemblathon/extend_X2250_assemblathon_flye.txt
+
+````
+
+
+#Polishing strategies of Flye assembly
+#Racon
+#Racon takes as input only three files: contigs in FASTA/FASTQ format, reads in FASTA/FASTQ format and overlaps/alignments between the reads and the contigs in MHAP/PAF/SAM format. Output is a set of polished contigs in FASTA format printed to stdout. All input files can be compressed with gzip (which will have impact on parsing time).
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/log
+dir_racon=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon
+assembly_1=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assembly.fasta
+reads=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq.gz
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J racon
+#BSUB -o $dir_racon/log/racon2.log 
+#BSUB -e $dir_racon/log/racon2.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+
+module load minimap2/2.9
+module load racon/1.4.7
+
+#minimap2 -x ava-ont -t 20 $assembly_1 $reads > $dir_racon/minimap.paf
+racon $reads $dir_racon/minimap.paf $assembly_1 -t 10 > $dir_racon/X2250_polished_flye_assembly_1.fasta
+
+EOF
+````
+#Busco after 1st round of polishing with racon
+```{bash, engine.opts='-l'}
+#mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/busco/log
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/busco
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/X2250_polished_flye_assembly_1.fasta
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_racon_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+cd  $dir
+busco -c 5 -i $genome -o X2250_BUSCO_embryophyta_racon -l embryophyta_odb10 -m genome 
+
+EOF
+```
+###Assemblathon of Flye-racon assembly ############# 
+
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/assemblathon/log
+
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/X2250_polished_flye_assembly_1.fasta
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/assemblathon
+
+#assemblathon_stats.pl -n 1 -genome_size 1500000000 $assembly > X2250_assemblathon_flye-racon.txt
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> extend_X2250_assemblathon_flye-racon.txt
+
+
+less /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/assemblathon/extend_X2250_assemblathon_flye-racon.txt
+
+````
+
+
+
+#Run medaka on Flye assembly no-racon
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka
+fastx=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq.gz
+flye_assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assembly.fasta
+
+bsub << EOF
+
+#!/bin/bash
+#BSUB -J Medaka
+#BSUB -o $dir/log/medaka_flye.out 
+#BSUB -e $dir/log/medaka_flye.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load minimap2/2.9
+module load samtools/1.9
+module load conda
+conda activate medaka
+
+medaka_consensus -i $fastx -d $flye_assembly -t 10 -m r941_prom_sup_g507 -o $dir
+
+EOF
+
+```
+
+
+#Busco of Flye medaka ############
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/busco/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/busco
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/consensus.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_medaka_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+busco -c 5 -i $genome -o X2250_Flye_medaka_BUSCO_embryophyta -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+# Assemblathon flye_medaka######
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/assemblathon/log
+
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/consensus.fasta
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/assemblathon
+
+#assemblathon_stats.pl -n 1 -genome_size 1500000000 $assembly > X2250_assemblathon_flye-medaka.txt
+
+#/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> extend_X2250_assemblathon_flye-medaka.txt
+
+
+less extend_X2250_assemblathon_flye-medaka.txt
+
+````
+
+
+
+
+########## Shasta assembly##############
+
+
+#https://www.nature.com/articles/s41587-020-0503-6
+
+
+#Ann McCartney's paper (https://www.biorxiv.org/content/10.1101/2020.10.28.358903v1.full.pdf) has a lot of commentary on an 
+#Shasta but she used a very early version (Shastav0.1.0) so it is worth exploring hte use of the more recent version 0.7.0. Ann showed that shasta benefited from higher coverage. It's default behaviour is to discard any reads shorter than 'Reads.minReadLength' bases (10000). As the estimate N50 of the Promethion data is only 25 Kb maybe its best to try using a lower value for the first trial shasta assembly to increase the coverage (?).
+
+
+
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq
+
+N=1
+MIN_READ_LENGTH=10000
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J shasta_X2250
+#BSUB -o $dir/log/shasta.out 
+#BSUB -e $dir/log/shasta.err
+#BSUB -n 45
+#BSUB -R "span[hosts=1]"
+
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta
+ 
+/workspace/hrpelg/programs/shasta/shasta-Linux-0.7.0 --input $input --threads 45 --assemblyDirectory ShastaRun.${N}.mrl${MIN_READ_LENGTH}
+
+
+EOF
+```
+
+##Busco of Shasta assembly####################
+
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/BUSCO
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Assembly.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_shasta_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/BUSCO
+
+busco -c 5 -i $genome -o X2250_Shasta_BUSCO_embryophyta -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+####Assemblathon of Shasta assembly ###############
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/assemblathon/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/assemblathon
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Assembly.fasta
+
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/assemblathon
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> Assemblathon_extend_shasta.txt
+
+less Assemblathon_extend_shasta.txt
+
+```
+
+#Run medaka on Shasta assembly no-racon
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka
+fastx=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq
+shasta_assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Assembly.fasta
+
+bsub << EOF
+
+#!/bin/bash
+#BSUB -J X2250_Medaka
+#BSUB -o $dir/log/medaka_shasta.out 
+#BSUB -e $dir/log/medaka_shasta.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load minimap2/2.9
+module load samtools/1.9
+module load conda
+conda activate medaka
+
+medaka_consensus -i $fastx -d $shasta_assembly -t 10 -m r941_prom_sup_g507 -o $dir
+
+EOF
+
+```
+
+#Assemblathon shasta_medaka#########
+
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/assemblathon/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/assemblathon
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/consensus.fasta
+
+
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/assemblathon
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> Assemblathon_extend_shasta_medaka.txt
+
+less Assemblathon_extend_shasta_medaka.txt
+
+```
+#BUSCO shasta_medaka ####
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/BUSCO
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/consensus.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_shasta_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/BUSCO
+
+busco -c 5 -i $genome -o X2250_Shasta_medaka_BUSCO_embryophyta -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+
+
+
+
+# Racon of Shasta assembly ###
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/log
+dir_racon=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Assembly.fasta
+reads=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J X2250_racon
+#BSUB -o $dir_racon/log/racon2.log 
+#BSUB -e $dir_racon/log/racon2.err
+#BSUB -n 15
+#BSUB -R "span[hosts=1]"
+
+module load minimap2/2.9
+module load racon/1.4.7
+
+minimap2 -x ava-ont -t 15 $assembly $reads > $dir_racon/minimap.paf
+racon $reads $dir_racon/minimap.paf $assembly -t 15 > $dir_racon/X2250_shasta_racon_assembly.fasta
+
+
+EOF
+````
+#BUSCO shasta_racon ####
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/BUSCO
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/X2250_shasta_racon_assembly.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_shasta_racon_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/BUSCO
+
+busco -c 5 -i $genome -o X2250_Shasta_racon_BUSCO_embryophyta -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+#Assemblathon shasta_racon#########
+
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/assemblathon/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/assemblathon
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/X2250_shasta_racon_assembly.fasta
+
+
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/assemblathon
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> Assemblathon_extend_shasta_racon.txt
+
+less Assemblathon_extend_shasta_racon.txt
+
+```
+
+
+
+
+
+
+# De novo assembly: Run canu2 
+
+#De novo assembly with canu assembler using the basecalled reads
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+canu_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq.gz
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J Canu
+#BSUB -o $canu_dir/log/canu.out 
+#BSUB -e $canu_dir/log/canu.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+
+thread=20
+module load canu/2.1.1
+canu -p Canu_X2250_raw_promethium -d $canu_dir corMhapSensitivity=normal contigFilter="2 0 1.0 0.5 0" useGrid=false maxThreads=$thread genomeSize=750m -nanopore-raw $input 
+
+
+EOF
+```
+I stopped canu after correcting as the trimming was getting to long and I submitthe following for trimming and assemble
+
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_absecalled_reads/04.canu/log
+canu_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+
+corrected=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J Canu
+#BSUB -o $canu_dir/log/canu2.out 
+#BSUB -e $canu_dir/log/canu2.err
+#BSUB -n 48
+#BSUB -R "span[hosts=1]"
+#BSUB -q priority -P P/150119/01
+
+
+thread=48
+module load canu/2.1.1
+canu -trim-assemble -nanopore $corrected -p Canu_X2250_raw_promethium -d $canu_dir useGrid=false maxThreads=$thread genomeSize=1.5g 
+
+
+EOF
+```
+
+####Assemblathon of CANU assembly ###############
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/assemblathon/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/assemblathon
+assembly=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta 
+
+module load assemblathon_stats/14dfdab
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/assemblathon
+
+/workspace/hrarnc/GitHub/Scriptomics/hrarnc/PerlScripts/Assembly/assemblathon_stats_v1.1.pl -n 1 -genome_size 1500000000 $assembly 2> Assemblathon_extend_canu.txt
+
+less Assemblathon_extend_canu.txt
+
+```
+
+####Busco of Canu assembly #####################
+
+```{bash, engine.opts='-l'}
+
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/busco/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/busco
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_canu_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"q
+
+module load BUSCO/v5.1.2
+cd  $dir 
+busco -c 5 -i $genome -o X2250_BUSCO_embryophyta_canu -l embryophyta_odb10 -m genome 
+
+EOF
+```
+
+#BUSCO shasta_medaka ####
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/BUSCO
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_canu_X2250
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/BUSCO
+
+busco -c 5 -i $genome -o X2250_BUSCO_embryophyta_canu -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+
+###### Using KAT to assess the completeness and level of duplication in the assemblies by comparing kmers in a set of reads and each candidate assembly ######
+
+#https://kat.readthedocs.io/en/latest/walkthrough.html 
+
+# Genome analysis using k-mer spectra
+
+#We use these as a fast first analysis to check assembly coherence against the content within reads that were used to produce the assembly. Basically we represent how many elements of each frequency on the read’s spectrum ended up not included in the assembly, included once, included twice etc.
+
+```{bash, engine.opts='-l'}
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/KAT/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/KAT
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq
+flye=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye/assembly.fasta 
+flye_racon=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/X2250_polished_flye_assembly_1.fasta
+flye_medaka=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/consensus.fasta
+shasta=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Assembly.fasta
+shasta_racon=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/X2250_shasta_racon_assembly.fasta
+shasta_medaka=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/consensus.fasta
+canu=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J kat3
+#BSUB -o $dir/log/kat3_canu.out 
+#BSUB -e $dir/log/kat3_canu.err
+#BSUB -n 30
+#BSUB -R "span[hosts=1]"
+
+
+module load kat/2.4.1
+cd $dir
+
+
+#kat comp -t 20 -h -o raw_ONT_vs_flye_1500_Mb $input $flye
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_flye -o 2_raw_ONT_vs_flye_1500_Mb raw_ONT_vs_flye_1500_Mb-main.mx
+
+
+#kat comp -t 20 -h  -o raw_ONT_vs_flye_racon $input $flye_racon  
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_flye_racon -o raw_ONT_vs_flye_racon raw_ONT_vs_flye_racon-main.mx
+
+
+
+#kat comp -t 20 -h -o raw_ONT_vs_flye_medaka $input $flye_medaka
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_flye_medaka -o raw_ONT_vs_flye_medaka raw_ONT_vs_flye_medaka-main.mx
+
+
+#kat comp -t 20 -h -o raw_ONT_vs_shasta $input $shasta
+
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_shasta_ -o raw_ONT_vs_shasta raw_ONT_vs_shasta-main.mx
+
+
+#kat comp -t 20 -h -o raw_ONT_vs_shasta_medaka $input $shasta_medaka
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_shasta_medaka -o raw_ONT_vs_shasta_medaka raw_ONT_vs_shasta_medaka-main.mx
+
+
+#kat comp -t 20 -h -o raw_ONT_vs_shasta_racon $input $shasta_racon
+
+#kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_shasta_racon -o raw_ONT_vs_shasta_racon raw_ONT_vs_shasta_racon-main.mx
+
+
+kat comp -t 30 -h -o raw_ONT_vs_canu $input $canu
+
+kat plot spectra-cn -x 200 -y 50000000 -t X2250_1500_Mb_canu -o raw_ONT_vs_canu raw_ONT_vs_canu-main.mx
+
+
+
+EOF
+
+````
+
+
+##KAT with canu-corrected reads##
+```{bash, engine.opts='-l'}
+canu=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+canu_corrected=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/KAT
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J kat
+#BSUB -o $dir/log/kat_corr_canu.out 
+#BSUB -e $dir/log/kat_corr_canu.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+
+module load kat/2.4.1
+cd $dir
+
+
+kat comp -t 20 -h -o canu_corr_ONT_vs_canu $canu_corrected $canu
+
+kat plot spectra-cn -x 200 -y 50000000 -t X2250_canu_vs_canu_corrected -o X2250_canu_vs_canu_corrected canu_corr_ONT_vs_canu-main.mx
+
+EOF
+```
+
+
+###Summary plot of all the BUSCO of all assemblies ###
+```{bash, engine.opts='-l'}
+
+#To run scripts/generate_plot.py, first create a folder, e.g. mkdir BUSCO_summaries, and then copy the BUSCO short summary file from each of the runs you want to plot into this folder
+
+#mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/07.busco-summaries
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/07.busco-summaries
+#ls -lht 
+
+#Then simply run the script giving as argument the name (or full path if you are not in same working directory) of the folder you created containing the summaries you wish to plot
+
+
+module load BUSCO/v5.1.2
+
+
+#capture the full path to the singularity image file
+export BUSCO=$(which busco)
+
+
+#run an arbitrary command inside that container
+singularity exec $BUSCO python3.7 /busco/scripts/generate_plot.py -wd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/07.busco-summaries
+
+#####this is producing and R script but not the plots as complaining about ggplot2 not being installed in this R version
+
+
+```
+
+######################################
+#
+# BUSCO summary figure
+# @version 4.0.0
+# @since BUSCO 2.0.0
+# 
+# Copyright (c) 2016-2021, Evgeny Zdobnov (ez@ezlab.org)
+# Licensed under the MIT license. See LICENSE.md file.
+#
+######################################
+
+# Load the required libraries
+library(ggplot2)
+library("grid")
+
+# !!! CONFIGURE YOUR PLOT HERE !!! 
+# Output
+my_output <- paste("/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/07.busco-summaries/","busco_figure.png",sep="/") 
+my_width <- 20
+my_height <- 15
+my_unit <- "cm"
+
+# Colors
+my_colors <- c("#56B4E9", "#3492C7", "#F0E442", "#F04442")
+# Bar height ratio
+my_bar_height <- 0.75
+
+# Legend
+my_title <- "BUSCO Assessment Results"
+
+# Font
+my_family <- "sans"
+my_size_ratio <- 1
+
+# !!! SEE YOUR DATA HERE !!! 
+# Your data as generated by python, remove or add more
+my_species <- c('X2250_Shasta_Medaka', 'X2250_Shasta_Medaka', 'X2250_Shasta_Medaka', 'X2250_Shasta_Medaka', 'X2250_Flye_Medaka', 'X2250_Flye_Medaka', 'X2250_Flye_Medaka', 'X2250_Flye_Medaka', 'X2250_Shasta', 'X2250_Shasta', 'X2250_Shasta', 'X2250_Shasta', 'X2250_Flye', 'X2250_Flye', 'X2250_Flye', 'X2250_Flye', 'X2250_Flye_Racon', 'X2250_Flye_Racon', 'X2250_Flye_Racon', 'X2250_Flye_Racon', 'X2250_Shasta_Racon', 'X2250_Shasta_Racon', 'X2250_Shasta_Racon', 'X2250_Shasta_Racon', 'X2250_Canu', 'X2250_Canu', 'X2250_Canu', 'X2250_Canu')
+my_species <- factor(my_species)
+my_species <- factor(my_species,levels(my_species)[c(length(levels(my_species)):1)]) # reorder your species here just by changing the values in the vector :
+my_percentage <- c(54.6, 41.9, 2.5, 1.0, 49.3, 48.7, 1.5, 0.5, 54.6, 41.9, 2.5, 1.0, 52.9, 45.0, 1.6, 0.5, 49.9, 48.0, 1.5, 0.6, 61.1, 34.4, 2.4, 2.1, 31.3, 67.5, 0.8, 0.4)
+my_values <- c(881, 676, 41, 16, 796, 786, 24, 8, 881, 676, 41, 16, 854, 726, 26, 8, 805, 775, 24, 10, 986, 556, 39, 33, 505, 1089, 13, 7)
+
+######################################
+######################################
+######################################
+# Code to produce the graph
+labsize = 1
+if (length(levels(my_species)) > 10){
+ labsize = 0.66
+}
+print("Plotting the figure ...")
+category <- c(rep(c("S","D","F","M"),c(1)))
+category <-factor(category)
+category = factor(category,levels(category)[c(4,1,2,3)])
+df = data.frame(my_species,my_percentage,my_values,category)
+
+figure <- ggplot() + 
+  
+  geom_bar(aes(y = my_percentage, x = my_species, fill = category), position = position_stack(reverse = TRUE), data = df, stat="identity", width=my_bar_height) + 
+  coord_flip() + 
+  theme_gray(base_size = 8) + 
+  scale_y_continuous(labels = c("0","20","40","60","80","100"), breaks = c(0,20,40,60,80,100)) + 
+  scale_fill_manual(values = my_colors,labels =c(" Complete (C) and single-copy (S)  ",
+                                                 " Complete (C) and duplicated (D)",
+                                                 " Fragmented (F)  ",
+                                                 " Missing (M)")) +   
+  ggtitle(my_title) + 
+  xlab("") + 
+  ylab("\n%BUSCOs") + 
+
+  theme(plot.title = element_text(family=my_family, hjust=0.5, colour = "black", size = rel(2.2)*my_size_ratio, face = "bold")) + 
+  theme(legend.position="top",legend.title = element_blank()) + 
+  theme(legend.text = element_text(family=my_family, size = rel(1.2)*my_size_ratio)) + 
+  theme(panel.background = element_rect(color="#FFFFFF", fill="white")) + 
+  theme(panel.grid.minor = element_blank()) + 
+  theme(panel.grid.major = element_blank()) +
+  theme(axis.text.y = element_text(family=my_family, colour = "black", size = rel(1.66)*my_size_ratio)) + 
+  theme(axis.text.x = element_text(family=my_family, colour = "black", size = rel(1.66)*my_size_ratio)) + 
+  theme(axis.line = element_line(size=1*my_size_ratio, colour = "black")) + 
+  theme(axis.ticks.length = unit(.85, "cm")) + 
+  theme(axis.ticks.y = element_line(colour="white", size = 0)) + 
+  theme(axis.ticks.x = element_line(colour="#222222")) + 
+  theme(axis.ticks.length = unit(0.4, "cm")) + 
+  theme(axis.title.x = element_text(family=my_family, size=rel(1.2)*my_size_ratio)) + 
+  
+  guides(fill = guide_legend(override.aes = list(colour = NULL))) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+  
+  for(i in rev(c(1:length(levels(my_species))))){
+    detailed_values <- my_values[my_species==my_species[my_species==levels(my_species)[i]]]
+    total_buscos <- sum(detailed_values)
+    figure <- figure + 
+    annotate("text", label=paste("C:", detailed_values[1] + detailed_values[2], " [S:", detailed_values[1], ", D:", detailed_values[2], "], F:", detailed_values[3], ", M:", detailed_values[4], ", n:", total_buscos, sep=""), 
+             y=3, x = i, size = labsize*4*my_size_ratio, colour = "black", hjust=0, family=my_family)
+  }
+  
+ggsave(figure, file=my_output, width = my_width, height = my_height, unit = my_unit)
+print("Done")
+
+####################################################################
+
+#Completeness assessment of Fly_assembly########
+
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/03.flye
+UNPOLISHED_FLYE_FASTA=assembly.fasta
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_flye
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d assembly $UNPOLISHED_FLYE_FASTA
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/03.flye/phased/gmap
+dir=/workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/03.flye/phased/gmap
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d assembly -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.flye.gff3
+
+# The output will be in gmap.log, so you will have to rename teh file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+#Completeness assessment of Fly_racon_assembly########
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon
+assembly=X2250_polished_flye_assembly_1.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_flye_racon
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d X2250_polished_flye_assembly_1 $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d X2250_polished_flye_assembly_1 -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.flye_racon.gff3
+
+# The output will be in gmap.log, so you will have to rename teh file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/05.racon/Plot_cov_genes_GDDHv1.1.ipynb
+
+#Completeness assessment of Fly_racon_medaka########
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka
+assembly=consensus.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_flye_medaka
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d consensus $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d consensus -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.flye_medaka.gff3
+
+# The output will be in gmap.log, so you will have to rename teh file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/06.medaka/Plot_cov_genes_GDDHv1.1.ipynb
+
+
+#Completeness assessment of Shasta#######
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000
+assembly=Assembly.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_shasta
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d Assembly $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d Assembly -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.shasta.gff3
+
+# The output will be in gmap.log, so you will have to rename the file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/ShastaRun.1.mrl10000/Plot_cov_genes_GDDHv1.1.ipynb
+
+
+
+#Completeness assessment of Shasta_racon#######
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon
+assembly=X2250_shasta_racon_assembly.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_shasta_racon
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d X2250_shasta_racon_assembly $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d X2250_shasta_racon_assembly -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.shasta_racon.gff3
+
+# The output will be in gmap.log, so you will have to rename the file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/racon/Plot_cov_genes_GDDHv1.1.ipynb
+
+#Completeness assessment of Shasta_medaka#######
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka
+assembly=consensus.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_shasta_medaka
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d consensus $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d consensus -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.shasta_medaka.gff3
+
+# The output will be in gmap.log, so you will have to rename the file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/031.shasta/medaka/Plot_cov_genes_GDDHv1.1.ipynb
+
+#Completeness assessment of Shasta_medaka#######
+```{bash, engine.opts='-l'}
+# check level of alignment of GDDHv1.1 V2 models using gmap - add to script and run via bsub
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+assembly=Canu_X2250_raw_promethium.contigs.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J gmap_canu
+#BSUB -o $dir/log/gmap.out 
+#BSUB -e $dir/log/gmap.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load gmap/2018-05-30
+
+gmap_build -D $dir -d Canu_X2250_raw_promethium.contigs $assembly
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+module load gmap/2018-05-30
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu
+
+bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -d Canu_X2250_raw_promethium.contigs -f gff3_gene --cross-species /workspace/hrpelg/M9_ONT/ANU_M9_Promethium/Guppy_basecalled_reads/GDDH13_1-1_mrna.fasta > GDDH13_1-1_mrna.vs.canu.gff3
+
+# The output will be in gmap.log, so you will have to rename the file to GDDH13_1-1_mrna.vs.flye.gff3 and remove the last lines of the file that are the open lava finish report in order to be a proper gff3 file
+
+```
+
+### Run jupyter python notebook to get % of genes with % identities and coverage### 
+#/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Plot_cov_genes_GDDHv1.1.ipynb
+
+
+
+
+
+#########RUN Purge_Haplotigs########## for reassigning primary contigs that should be labelled as haplotigs.
+#We run Flye with -keep haplotypes and we show in Busco taht most of the genes of busco set were repeated meaning both haplotypes were kept and didnt end uo collapsed.
+#After running purge_haplotigs we are after identify each contig belonging to each haplotype
+# To asign each haplotig to each right homeologue we will used SNPchip data from R5*M9
+#https://bitbucket.org/mroachawri/purge_haplotigs/src/master/
+#https://jupyterhub.powerplant.pfr.co.nz/user/hrpelg/lab/tree/hrarnc/GitHub/Actinidia_chinensis_Genome_CK69_01/Notebooks/2021.007.Examining_impact_of_purge_haplotigs_on_polished_flye_assembly.ipynb
+
+
+## STEP1: Generate a coverage histogram by running the first script. This script will produce a histogram png image file for you to look at and a BEDTools 'genomecov' output file that you'll need for STEP 2.##
+```{bash, engine.opts='-l'}
+
+## Generate a coverage histogram by running the first script. This script will produce a histogram png image file for you to look at and a BEDTools 'genomecov' output file that you'll need for STEP 2.##
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+reads=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/pass/All_Promethium_X2250_reads.fastq
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J purge_haplotigs
+#BSUB -o $dir/log/purge_ha2.out 
+#BSUB -e $dir/log/purge_ha2.err
+#BSUB -n 40
+#BSUB -R "span[hosts=1]"
+
+module load conda/4.8.2
+conda activate purge_haplotigs_env
+module load minimap2/2.9 
+module unload perl
+module load perl/bio-extras
+module load bedtools/2.30.0
+module load samtools/1.9
+module load R/4.0.0
+
+
+#PREPARATION
+#Map your PacBio subreads, or some decent long reads (or even short reads) to your haploid or diploid genome assembly. #You'll want to map a library that produces an even coverage and use a 'randombest' alignment for multimappers. Sort and #index the bam with samtools index. Index your genome.fasta file with samtools faidx. Example below uses minimap2 to map #some pacbio FASTA format subreads (4 mapping threads, 1 sorting thread).
+
+
+#I will do this just with Canu genome
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+
+#minimap2 -t 40 --secondary=no -ax map-ont $genome $reads > ONT_reads_vs_canu.bam
+#samtools sort -@ 40 ONT_reads_vs_canu.bam -o sorted_ONT_reads_vs_canu.bam
+purge_haplotigs readhist -t 40 -b sorted_ONT_reads_vs_canu.bam -g $genome -d 100
+
+EOF
+```
+
+#MANUAL STEP
+#You should have a bimodal histogram--one peak for haploid level of coverage, one peak for diploid level of coverage. NOTE: If you're using the phased assembly the diploid peak may be very small. Choose cutoffs for low coverage, low point between the two peaks, and high coverage. Example histograms for choosing cutoffs:
+
+##STEP 2:Run the second script using the cutoffs from the previous step to analyse the coverage on a contig by contig basis. This script produces a contig coverage stats csv file with suspect contigs flagged for further analysis or removal.
+
+#-j / -junk      Auto-assign contig as "j" (junk) if this percentage or greater of the contig is 
+                low/high coverage (DEFAULT = 80, > 100 = don't junk anything)
+#-s / -suspect   Auto-assign contig as "s" (suspected haplotig) if this percentage or less of the
+                contig is diploid level of coverage (DEFAULT = 80)
+```{bash, engine.opts='-l'}
+
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+bsub << EOF
+#!/bin/bash
+#BSUB -J purge_haplotigs
+#BSUB -o $dir/log/purge_step2.out 
+#BSUB -e $dir/log/purge_step2.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+module load conda/4.8.2
+conda activate purge_haplotigs_env
+module load minimap2/2.9 
+module unload perl
+module load perl/bio-extras
+module load bedtools/2.30.0
+module load samtools/1.9
+module load R/4.0.0
+
+#cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+#purge_haplotigs cov -i sorted_ONT_reads_vs_canu.bam.gencov -l 6 -m 18 -h 95 \
+#-o X2250_canu_coverage_stats.csv
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+purge_haplotigs cov -i sorted_ONT_reads_vs_canu.bam.gencov -l 17 -m 50 -h 90 \
+-o 2_X2250_canu_coverage_stats.csv
+
+
+EOF
+```
+#STEP 3
+#Run the purging pipeline. This script will automatically run a BEDTools windowed coverage analysis (if generating dotplots), and minimap2 alignments to assess which contigs to reassign and which to keep. The pipeline will make several iterations of purging. Optionally, parse repeats -r in BED format for improved handling of repetitive regions
+
+```{bash, engine.opts='-l'}
+genome=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+bam=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs/sorted_ONT_reads_vs_canu.bam
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J purge_haplotigs
+#BSUB -o $dir/log/purge_step3_dotplots.out 
+#BSUB -e $dir/log/purge_step3_dotplots.err
+#BSUB -n 40
+#BSUB -R "span[hosts=1]"
+
+module load conda/4.8.2
+conda activate purge_haplotigs_env
+module load minimap2/2.9 
+module unload perl
+module load perl/bio-extras
+module load bedtools/2.30.0
+module load samtools/1.9
+module load R/4.0.0
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+
+purge_haplotigs purge -g $genome -c 2_X2250_canu_coverage_stats.csv -d \
+-b sorted_ONT_reads_vs_canu.bam -t 40 -o 2_X2250_curated
+
+
+EOF
+```
+```{bash, engine.opts='-l'}
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
+#ls -lht 
+
+#primary contigs
+grep ">" X2250_curated.fasta | wc -l 
+
+echo 'final primary contigs' 
+grep "KEEP" X2250_curated.reassignments.tsv | wc -l
+
+
+#haplotigs contigs 
+
+echo "contigs to be consider for haplotig re-assignment: calculate which are repeats and haplotigs"
+grep ">" X2250_curated.haplotigs.fasta | wc -l 
+
+echo 'haplotigs contigs'
+grep "HAPLOTIG" X2250_curated.reassignments.tsv | wc -l
+
+echo "repeat contigs"
+grep "REPEAT" X2250_curated.reassignments.tsv | wc -l
+
+#junk contigs
+
+echo 'contigs to be removed'
+grep ">" X2250_curated.artefacts.fasta | wc -l 
+
+echo "removed contigs"
+grep "JUNK" X2250_curated.reassignments.tsv | wc -l
+
+
+```
+##### NUCMER CANU ASSEMBLY AGAINST GD ################
+```{bash, engine.opts='-l'}
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+canu=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+ref=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J delta 1
+#BSUB -o $dir/log/delta1.out
+#BSUB -e $dir/log/delta1.err
+#BSUB -n 1
+#BSUB -R "span[hosts=1]"
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+export GDFONTPATH=/usr/share/fonts/msttcore/
+#/workspace/hrarnc/GitHub/mummer-4.0.0rc1/nucmer -t 25 --maxmatch --delta $dir/X2250_Canu_vs_GDv1.1 $ref $canu
+#/software/bioinformatics/MUMmer-3.23/delta-filter -l 2000 -q -r -i 90 -1 X2250_Canu_vs_GDv1.1 > #i90_X2250_canu_vsGDv1.1.delta
+
+#/software/bioinformatics/MUMmer-3.23/show-coords -c -r -T -L 2000 -I 80 -o X2250_Canu_vs_GDv1.1 > i80_X2250_Canu_vs_GDv1.1.coords
+
+/software/bioinformatics/MUMmer-3.23/delta-filter -l 2000 -q -r Chr01 -i 90 -1 X2250_Canu_vs_GDv1.1 > Chr01_i90_X2250_canu_vsGDv1.1.delta
+
+#/software/bioinformatics/MUMmer-3.23/delta-filter -l 2000 -q -r -i 90 -1 X2250_Canu_vs_GDv1.1 > #Chr02_i90_X2250_canu_vsGDv1.1.delta
+EOF
+```
+```{bash, engine.opts='-l'}
+# Total lengths of nucmer alignments accounting alignments that are 5.2Kb or longer 
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$6,$11}' | sort -k 2 | awk -F' ' '{sum+=$1;}END{print sum;}'
+
+ 
+#1,494,470,858 of total alignment 1.5Gb
+
+#This accounts for 7934 contigs of a total of 8664
+
+ rep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u | wc -l
+#7934
+
+# Uniq Contigs that have hits longer than 9700 bp
+grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u > contigs_vs_GD_align_9700.txt
+
+# calculate the lenght of the sum of those contigs in the previous list
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/
+
+grep -f ./nucmer/contigs_vs_GD_align_9700.txt Canu_X2250_raw_promethium.contigs.fasta | grep ">" > len_contigs_vs_GD_align_9700.txt
+
+#I opened in Excel and calculate it there from header feature len= (second column)
+
+#1567739140
+#1.56 Gb 
+
+#sorted contig 9763, longest 714,2381
+
+#All the hits-alignments are of identify higher than 90% on that so we could use the i90_X2250_canu_vsGDv1.1.delta for plotting
+
+grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$0}' | wc -l
+
+#106847
+
+grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$0}' | awk '{if($7>=90) print$0}' | wc -l
+
+#106847
+
+#Count the number of contigs per chromosome that give alignment >= 9700 bp
+
+grep "Chr01" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#739
+grep "Chr02" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#1000
+grep "Chr03" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#818
+grep "Chr04" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#592
+grep "Chr05" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#986
+grep "Chr06" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#820
+grep "Chr07" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#878
+grep "Chr08" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#557
+grep "Chr09" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#644
+grep "Chr10" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#899
+grep "Chr11" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#879
+grep "Chr12" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#694
+grep "Chr13" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#717
+grep "Chr14" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#706
+grep "Chr15" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#1361
+grep "Chr16" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#814
+grep "Chr17" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
+#881
+
+for i in {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17}; 
+do; 
+grep 'Chr'$i'' i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u > i90_Chr'$i'_contigs.txt; 
+done
+
+```
+```{bash, engine.opts='-l'}
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+for j in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 
+do 
+grep 'Chr'$j X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u > chr$j'_9700_coords.txt'
+done
+```
+
+```{bash, engine.opts='-l'}
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+for p in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 
+do
+ /software/bioinformatics/MUMmer-3.23/mummerplot --layout -t png -s large -r 'Chr'$p -p 'layout_chr'_$p i90_X2250_canu_vsGDv1.1.delta
+done
+
+```
+
+```{r}
+#Mummerplots with ggplot2
+
+#Source from https://jmonlong.github.io/Hippocamplus/2017/09/19/mummerplots-with-ggplot2/
+setwd('/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer')
+
+library(dplyr)
+library(magrittr)
+library(GenomicRanges)
+library(knitr)
+library(ggplot2)
+library(tidyr)
+library()
+
+#READ THE DELTA FILE
+readDelta <- function(deltafile){
+  lines = scan(deltafile, 'a', sep='\n', quiet=TRUE)
+  lines = lines[-1]
+  lines.l = strsplit(lines, ' ')
+  lines.len = lapply(lines.l, length) %>% as.numeric
+  lines.l = lines.l[lines.len != 1]
+  lines.len = lines.len[lines.len != 1]
+  head.pos = which(lines.len == 4)
+  head.id = rep(head.pos, c(head.pos[-1], length(lines.l)+1)-head.pos)
+  mat = matrix(as.numeric(unlist(lines.l[lines.len==7])), 7)
+  res = as.data.frame(t(mat[1:5,]))
+  colnames(res) = c('rs','re','qs','qe','error')
+  res$qid = unlist(lapply(lines.l[head.id[lines.len==7]], '[', 2))
+  res$rid = unlist(lapply(lines.l[head.id[lines.len==7]], '[', 1)) %>% gsub('^>', '', .)
+  res$strand = ifelse(res$qe-res$qs > 0, '+', '-')
+  res
+}
+
+mumgp = readDelta("/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/i90_X2250_canu_vsGDv1.1.delta")
+mumgp %>% head %>% kable
+#this new command with nrow is the same than  grep "Chr" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l which it counts the uniq contigs on the entire delta file including Chr00
+
+nrow(unique(mumgp['qid']))
+#7331
+
+
+            
+#Filter contigs with poor alignments
+#For now, I filter contigs simply based on the size of the aligned segment. I keep only contigs with at least one aligned segment larger than a minimum size. Smaller alignment in these contigs are kept if in the same range as the large aligned segments. Eventually, I could also filter segment based on the number/proportion of errors.
+
+filterMum <- function(df, minl=20000, flanks=1e4){
+    coord = df %>% filter(abs(re-rs)>minl) %>% group_by(qid, rid) %>%
+        summarize(qsL=min(qs)-flanks, qeL=max(qe)+flanks, rs=median(rs)) %>%
+        ungroup %>% arrange(desc(rs)) %>%
+        mutate(qid=factor(qid, levels=unique(qid))) %>% select(-rs)
+    merge(df, coord) %>% filter(qs>qsL, qe<qeL) %>%
+        mutate(qid=factor(qid, levels=levels(coord$qid))) %>% select(-qsL, -qeL)
+}
+
+mumgp.filt = filterMum(mumgp)
+mumgp.filt %>% head %>% kable
+
+
+#number of total unique contigs after filtering by minimum lenght of aignment 
+
+nrow(unique(mumgp.filt['qid']))
+#5118 counting Chr00
+
+
+
+#Diagonalize
+#For each contig, I compute the major strand (strand with most bases aligned) and flip if necessary. The contigs are also ordered based on the reference region with most bases and the weighted means of the start position in this matched reference region.
+
+diagMum <- function(df){
+    ## Find best qid order
+    rid.o = df %>% group_by(qid, rid) %>% summarize(base=sum(abs(qe-qs)),
+                                                    rs=weighted.mean(rs, abs(qe-qs))) %>%
+        ungroup %>% arrange(desc(base)) %>% group_by(qid) %>% do(head(., 1)) %>%
+        ungroup %>% arrange(desc(rid), desc(rs)) %>%
+        mutate(qid=factor(qid, levels=unique(qid)))
+    ## Find best qid strand
+    major.strand = df %>% group_by(qid) %>%
+        summarize(major.strand=ifelse(sum(sign(qe-qs)*abs(qe-qs))>0, '+', '-'),
+                  maxQ=max(c(qe, qs)))
+    merge(df, major.strand) %>% mutate(qs=ifelse(major.strand=='-', maxQ-qs, qs),
+                                       qe=ifelse(major.strand=='-', maxQ-qe, qe),
+                                       qid=factor(qid, levels=levels(rid.o$qid)))
+}
+
+mumgp.filt.diag = diagMum(mumgp.filt)
+
+nrow(unique(mumgp.filt.diag ['qid']))
+#3295
+
+#number of contigs in Chr00:
+mumgp.filt.diag0 = filter(mumgp.filt.diag, rid == "Chr00")
+nrow(unique(mumgp.filt.diag0 ['qid']))
+#272
+
+mumgp.filt.diag1 = filter(mumgp.filt.diag, rid == "Chr01")
+
+#number of contigs in Chr01:
+nrow(unique(mumgp.filt.diag1 ['qid']))
+#139
+mumgp.filt.diag2 = filter(mumgp.filt.diag, rid == "Chr02")
+nrow(unique(mumgp.filt.diag2 ['qid']))
+#167
+mumgp.filt.diag3 = filter(mumgp.filt.diag, rid == "Chr03")
+nrow(unique(mumgp.filt.diag3 ['qid']))
+#203
+mumgp.filt.diag4 = filter(mumgp.filt.diag, rid == "Chr04")
+nrow(unique(mumgp.filt.diag4 ['qid']))
+#194
+mumgp.filt.diag5 = filter(mumgp.filt.diag, rid == "Chr05")
+nrow(unique(mumgp.filt.diag5 ['qid']))
+#283
+mumgp.filt.diag6 = filter(mumgp.filt.diag, rid == "Chr06")
+nrow(unique(mumgp.filt.diag6 ['qid']))
+#149
+mumgp.filt.diag7 = filter(mumgp.filt.diag, rid == "Chr07")
+nrow(unique(mumgp.filt.diag7 ['qid']))
+#152
+mumgp.filt.diag8 = filter(mumgp.filt.diag, rid == "Chr08")
+nrow(unique(mumgp.filt.diag8 ['qid']))
+#169
+mumgp.filt.diag9 = filter(mumgp.filt.diag, rid == "Chr09")
+nrow(unique(mumgp.filt.diag9 ['qid']))
+#211
+mumgp.filt.diag10 = filter(mumgp.filt.diag, rid == "Chr10")
+nrow(unique(mumgp.filt.diag10 ['qid']))
+#225
+mumgp.filt.diag11 = filter(mumgp.filt.diag, rid == "Chr11")
+nrow(unique(mumgp.filt.diag11 ['qid']))
+#226
+mumgp.filt.diag12 = filter(mumgp.filt.diag, rid == "Chr12")
+nrow(unique(mumgp.filt.diag12 ['qid']))
+#152
+mumgp.filt.diag13 = filter(mumgp.filt.diag, rid == "Chr13")
+nrow(unique(mumgp.filt.diag13 ['qid']))
+#148
+mumgp.filt.diag14 = filter(mumgp.filt.diag, rid == "Chr14")
+nrow(unique(mumgp.filt.diag14 ['qid']))
+#134
+mumgp.filt.diag15 = filter(mumgp.filt.diag, rid == "Chr15")
+nrow(unique(mumgp.filt.diag15 ['qid']))
+#283
+mumgp.filt.diag16 = filter(mumgp.filt.diag, rid == "Chr16")
+nrow(unique(mumgp.filt.diag16 ['qid']))
+#211
+mumgp.filt.diag17 = filter(mumgp.filt.diag, rid == "Chr17")
+nrow(unique(mumgp.filt.diag17 ['qid']))
+#142
+
+#TOTAL SCAFFOLDS 3188 or 3205 with Chr00
+
+
+#Chr01
+tiff(filename="Contigs_Canu_Chr01_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag1, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr01_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr02
+tiff(filename="Contigs_Canu_Chr02_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag2, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr02_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr03
+tiff(filename="Contigs_Canu_Chr03_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag3, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr03_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr04
+tiff(filename="Contigs_Canu_Chr04_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag4, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr04_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr05
+tiff(filename="Contigs_Canu_Chr05_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag5, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr05_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr06
+tiff(filename="Contigs_Canu_Chr06_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag6, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr06_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr07
+tiff(filename="Contigs_Canu_Chr07_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag7, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr07_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr08
+tiff(filename="Contigs_Canu_Chr08_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag8, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr08_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr09
+tiff(filename="Contigs_Canu_Chr09_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag9, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr09_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr10
+tiff(filename="Contigs_Canu_Chr10_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag10, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr10_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr11
+tiff(filename="Contigs_Canu_Chr11_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag11, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr11_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr12
+tiff(filename="Contigs_Canu_Chr12_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag12, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr12_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr13
+tiff(filename="Contigs_Canu_Chr13_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag13, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr13_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+
+#Chr14
+tiff(filename="Contigs_Canu_Chr14_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag14, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr14_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+#Chr15
+
+tiff(filename="Contigs_Canu_Chr15_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag15, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr15_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+
+#Chr16
+tiff(filename="Contigs_Canu_Chr16_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag16, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr16_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+#Chr17
+tiff(filename="Contigs_Canu_Chr17_GD.tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600)
+ggplot(mumgp.filt.diag17, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('Chr17_GDDHv1.1') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+ 
+
+
+
+
+
+
+
+debug <- TRUE
+for(i in ls(pattern="mumgp.filt.diag*")) {
+   for (j in 1:17) 
+  tiffFile <- paste0(i, ".tiff")
+  chr <- paste0("Chr",j)
+  if(debug) print(tiffFile)
+  ## Now create tiff
+  tiff('tiffFile", width=18, height=20, units="cm",
+       pointsize=8, compression="lzw", bg="white", res=600)
+  
+ ggplot(tiffFile, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+  geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
+  guides(colour=guide_legend(override.aes=list(alpha=1))) + 
+  theme(strip.text.y=element_text(angle=0, size=4),
+        strip.text.x=element_text(size=2),
+        strip.background=element_blank(),
+        legend.position=c(1,-.03), legend.justification=c(1,1),
+        legend.direction='horizontal',
+        axis.text.y=element_blank(), axis.ticks.y=element_blank(),
+        panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.border = element_blank()) +
+  xlab('chr') + ylab('assembly') + scale_colour_brewer(palette='Set1')
+  
+  dev.off()
+}
+```
+
+
+
+
+```{bash, engine.opts='-l'}
+#Calculate the length of the all contigs minus those in Chr00 to see if they would be enough to get to the haploid genome
+
+# number of countings without countings those on Chr00
+grep -v "Chr00" i90_delta_9700.txt | awk '{print$2} | sort -u | wc -l 
+
+#4913 countig one line of header
+
+
+grep -v "Chr00" i90_delta_9700.txt |  awk '{print$2}' | sort -u > Rfiltered_contigs_i90_9700.txt
+
+# remove "" from previous file 
+sed 's/"tig/tig/' Rfiltered_contigs_i90_9700.txt | sed 's/"//' > mummerplot_contigs_i90_9700.txt
+
+#Then I opened with nano editor and removed the header
+
+grep -f mummerplot_contigs_i90_9700.txt ../Canu_X2250_raw_promethium.contigs.fasta | grep ">" > final_mummerplot_len_contigs_vs_GD_align_9700.txt
+
+Then I opened in excel and summed up column 2 (lenght of contigs) = 1249,254,555 ~ 1,2 Gb
+Those contigs with >=100 reads per contig account for 715 Mb so it is plenty to be sure we have a complete haploid genome at least
+
+```
+#Write the table to a text file for filtering by Chromosome so later the pictures can be easier to process
+```{bash, engine.opts='-l'}
+
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+delta=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/i90_delta_9700.txt
+
+for t in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 
+do
+grep Chr$t $delta > Chr$t'i90_delta_9700.txt'
+done
+
+```
+
+
+
+
+
+
+
+
+
+###MAP CANU CORRECTED READS TO GD #####################
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+FQ=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J minimap2_x2250
+#BSUB -o $map_dir/log/minimap2.out 
+#BSUB -e $map_dir/log/minimap2.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+minimap2 -ax map-ont -t 20 $FQ $input | \
+samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
+samtools index $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
+samtools depth $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam > $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam.coverage
+
+EOF
+```
+###IDENTIFY CONTIGS INTO GD## MAP CANU ASSEMBLY VS GD ###################
+
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+ref=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J paf_x2250
+#BSUB -o $map_dir/log/minimap3.out 
+#BSUB -e $map_dir/log/minimap3.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+#minimap2 -ax map-ont -t 20 $ref $input | \
+#samtools view -Su - | samtools sort - -o $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
+#samtools index $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
+#samtools depth $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam.coverage
+
+
+minimap2 -ax map-ont -t 20 $ref $input > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.paf
+EOF
+```
+
+
+
+
+
+
+
+
+
+
+###MAP CANU CORRECTED READS TO CANU ASSEMBLY #####################
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+FQ=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J minimap2_x2250_asembly
+#BSUB -o $map_dir/log/minimap_assembly.out 
+#BSUB -e $map_dir/log/minimap_assembly.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+minimap2 -ax map-ont -t 20 $FQ $input | \
+samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
+samtools index $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
+samtools depth $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam > $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam.coverage
+
+EOF
+```
