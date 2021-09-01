@@ -1219,6 +1219,96 @@ bsub -n 30 -J gamp -R "span[hosts=1]" -o gmap.log -e gmap.err gmap -t 30 -D ./ -
 #/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Plot_cov_genes_GDDHv1.1.ipynb
 
 
+###MAP CANU CORRECTED READS TO GD #####################
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+FQ=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J minimap2_x2250
+#BSUB -o $map_dir/log/minimap2.out 
+#BSUB -e $map_dir/log/minimap2.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+minimap2 -ax map-ont -t 20 $FQ $input | \
+samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
+samtools index $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
+samtools depth $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam > $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam.coverage
+
+EOF
+```
+###IDENTIFY CONTIGS INTO GD## MAP CANU ASSEMBLY VS GD ###################
+
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+ref=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J paf_x2250
+#BSUB -o $map_dir/log/minimap3.out 
+#BSUB -e $map_dir/log/minimap3.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+#minimap2 -ax map-ont -t 20 $ref $input | \
+#samtools view -Su - | samtools sort - -o $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
+#samtools index $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
+#samtools depth $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam.coverage
+
+
+minimap2 -ax map-ont -t 20 $ref $input > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.paf
+EOF
+```
+
+
+###MAP CANU CORRECTED READS TO CANU ASSEMBLY #####################
+```{bash, engine.opts='-l'}
+
+module load minimap2/2.9
+module load samtools/1.9
+
+FQ=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
+map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
+input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J minimap2_x2250_asembly
+#BSUB -o $map_dir/log/minimap_assembly.out 
+#BSUB -e $map_dir/log/minimap_assembly.err
+#BSUB -n 20
+#BSUB -R "span[hosts=1]"
+
+minimap2 -ax map-ont -t 20 $FQ $input | \
+samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
+samtools index $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
+samtools depth $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam > $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam.coverage
+
+EOF
+```
 
 
 
@@ -1353,6 +1443,8 @@ cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_ha
 
 #primary contigs
 grep ">" X2250_curated.fasta | wc -l 
+grep ">" X2250_curated.fasta | sed 's/>//' | awk '{print$1}' > primary_contigs.txt
+#1760
 
 echo 'final primary contigs' 
 grep "KEEP" X2250_curated.reassignments.tsv | wc -l
@@ -1362,20 +1454,21 @@ grep "KEEP" X2250_curated.reassignments.tsv | wc -l
 
 echo "contigs to be consider for haplotig re-assignment: calculate which are repeats and haplotigs"
 grep ">" X2250_curated.haplotigs.fasta | wc -l 
-
+#6592
 echo 'haplotigs contigs'
 grep "HAPLOTIG" X2250_curated.reassignments.tsv | wc -l
-
+#4829
 echo "repeat contigs"
 grep "REPEAT" X2250_curated.reassignments.tsv | wc -l
-
+#1763
 #junk contigs
 
 echo 'contigs to be removed'
-grep ">" X2250_curated.artefacts.fasta | wc -l 
-
+grep ">" X2250_curated.artefacts.fasta | wc -l
+#312
 echo "removed contigs"
 grep "JUNK" X2250_curated.reassignments.tsv | wc -l
+#312
 
 
 ```
@@ -1401,7 +1494,6 @@ export GDFONTPATH=/usr/share/fonts/msttcore/
 
 #/software/bioinformatics/MUMmer-3.23/show-coords -c -r -T -L 2000 -I 80 -o X2250_Canu_vs_GDv1.1 > i80_X2250_Canu_vs_GDv1.1.coords
 
-/software/bioinformatics/MUMmer-3.23/delta-filter -l 2000 -q -r Chr01 -i 90 -1 X2250_Canu_vs_GDv1.1 > Chr01_i90_X2250_canu_vsGDv1.1.delta
 
 #/software/bioinformatics/MUMmer-3.23/delta-filter -l 2000 -q -r -i 90 -1 X2250_Canu_vs_GDv1.1 > #Chr02_i90_X2250_canu_vsGDv1.1.delta
 EOF
@@ -1417,7 +1509,7 @@ grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$6,$11}' |
 
 #This accounts for 7934 contigs of a total of 8664
 
- rep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u | wc -l
+ grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u | wc -l
 #7934
 
 # Uniq Contigs that have hits longer than 9700 bp
@@ -1446,6 +1538,9 @@ grep -v "Chr00" X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$0}' | awk
 #106847
 
 #Count the number of contigs per chromosome that give alignment >= 9700 bp
+grep "Chr" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}'| sort -u  | wc -l
+#7331 unique contigs in the whole file, so they are repeated across the different chromosomes, chimeric ones
+#as if we summ up the individuals contigs in each chromosome is more than the unique contigs in the entire file
 
 grep "Chr01" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l
 #739
@@ -1488,13 +1583,7 @@ grep 'Chr'$i'' i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u > i90_C
 done
 
 ```
-```{bash, engine.opts='-l'}
-cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
-for j in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 
-do 
-grep 'Chr'$j X2250_Canu_vs_GDv1.1.coords | awk '{if($6>=9700) print$11}' | sort -u > chr$j'_9700_coords.txt'
-done
-```
+
 
 ```{bash, engine.opts='-l'}
 cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
@@ -1505,7 +1594,7 @@ done
 
 ```
 
-```{r}
+```{R}
 #Mummerplots with ggplot2
 
 #Source from https://jmonlong.github.io/Hippocamplus/2017/09/19/mummerplots-with-ggplot2/
@@ -1543,10 +1632,12 @@ mumgp %>% head %>% kable
 #this new command with nrow is the same than  grep "Chr" i90_X2250_canu_vsGDv1.1.delta | awk '{print$2}' | sort -u  | wc -l which it counts the uniq contigs on the entire delta file including Chr00
 
 nrow(unique(mumgp['qid']))
-#7331
+#7331 same than what we counted in the delta file in previous chunk
+
+```
 
 
-            
+```{r}
 #Filter contigs with poor alignments
 #For now, I filter contigs simply based on the size of the aligned segment. I keep only contigs with at least one aligned segment larger than a minimum size. Smaller alignment in these contigs are kept if in the same range as the large aligned segments. Eventually, I could also filter segment based on the number/proportion of errors.
 
@@ -1593,10 +1684,17 @@ mumgp.filt.diag = diagMum(mumgp.filt)
 
 nrow(unique(mumgp.filt.diag ['qid']))
 #3295
+uall = unique(mumgp.filt.diag ['qid'])
+write.table (uall, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_ALL_chr.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 
 #number of contigs in Chr00:
 mumgp.filt.diag0 = filter(mumgp.filt.diag, rid == "Chr00")
 nrow(unique(mumgp.filt.diag0 ['qid']))
+u0 = unique(mumgp.filt.diag0 ['qid'])
+write.table (u0, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr0.txt", sep='\t', quote=FALSE,row.names=FALSE)
+
 #272
 
 mumgp.filt.diag1 = filter(mumgp.filt.diag, rid == "Chr01")
@@ -1604,54 +1702,112 @@ mumgp.filt.diag1 = filter(mumgp.filt.diag, rid == "Chr01")
 #number of contigs in Chr01:
 nrow(unique(mumgp.filt.diag1 ['qid']))
 #139
+u1 = unique(mumgp.filt.diag1 ['qid'])
+write.table (u1, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr1.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag2 = filter(mumgp.filt.diag, rid == "Chr02")
 nrow(unique(mumgp.filt.diag2 ['qid']))
 #167
+u2 = unique(mumgp.filt.diag2 ['qid'])
+write.table (u2, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr2.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag3 = filter(mumgp.filt.diag, rid == "Chr03")
 nrow(unique(mumgp.filt.diag3 ['qid']))
 #203
+u3 = unique(mumgp.filt.diag3 ['qid'])
+write.table (u3, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr3.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag4 = filter(mumgp.filt.diag, rid == "Chr04")
 nrow(unique(mumgp.filt.diag4 ['qid']))
 #194
+u4 = unique(mumgp.filt.diag4 ['qid'])
+write.table (u4, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr4.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag5 = filter(mumgp.filt.diag, rid == "Chr05")
 nrow(unique(mumgp.filt.diag5 ['qid']))
 #283
+u5 = unique(mumgp.filt.diag5 ['qid'])
+write.table (u5, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr5.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag6 = filter(mumgp.filt.diag, rid == "Chr06")
 nrow(unique(mumgp.filt.diag6 ['qid']))
 #149
+u6 = unique(mumgp.filt.diag6 ['qid'])
+write.table (u6, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr6.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag7 = filter(mumgp.filt.diag, rid == "Chr07")
 nrow(unique(mumgp.filt.diag7 ['qid']))
 #152
+u7 = unique(mumgp.filt.diag7 ['qid'])
+write.table (u7, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr7.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag8 = filter(mumgp.filt.diag, rid == "Chr08")
 nrow(unique(mumgp.filt.diag8 ['qid']))
 #169
+u8 = unique(mumgp.filt.diag8 ['qid'])
+write.table (u8, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr8.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag9 = filter(mumgp.filt.diag, rid == "Chr09")
 nrow(unique(mumgp.filt.diag9 ['qid']))
 #211
+u9 = unique(mumgp.filt.diag9 ['qid'])
+write.table (u9, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr9.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag10 = filter(mumgp.filt.diag, rid == "Chr10")
 nrow(unique(mumgp.filt.diag10 ['qid']))
 #225
+u10 = unique(mumgp.filt.diag10 ['qid'])
+write.table (u10, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr10.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag11 = filter(mumgp.filt.diag, rid == "Chr11")
 nrow(unique(mumgp.filt.diag11 ['qid']))
 #226
+u11 = unique(mumgp.filt.diag11 ['qid'])
+write.table (u11, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr11.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag12 = filter(mumgp.filt.diag, rid == "Chr12")
 nrow(unique(mumgp.filt.diag12 ['qid']))
 #152
+u12 = unique(mumgp.filt.diag12 ['qid'])
+write.table (u12, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr12.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag13 = filter(mumgp.filt.diag, rid == "Chr13")
 nrow(unique(mumgp.filt.diag13 ['qid']))
 #148
+u13 = unique(mumgp.filt.diag13 ['qid'])
+write.table (u13, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr13.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag14 = filter(mumgp.filt.diag, rid == "Chr14")
 nrow(unique(mumgp.filt.diag14 ['qid']))
 #134
+u14 = unique(mumgp.filt.diag14 ['qid'])
+write.table (u14, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr14.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
+
 mumgp.filt.diag15 = filter(mumgp.filt.diag, rid == "Chr15")
 nrow(unique(mumgp.filt.diag15 ['qid']))
 #283
+u15 = unique(mumgp.filt.diag15 ['qid'])
+write.table (u15, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr15.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag16 = filter(mumgp.filt.diag, rid == "Chr16")
 nrow(unique(mumgp.filt.diag16 ['qid']))
 #211
+u16 = unique(mumgp.filt.diag16 ['qid'])
+write.table (u16, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr16.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 mumgp.filt.diag17 = filter(mumgp.filt.diag, rid == "Chr17")
 nrow(unique(mumgp.filt.diag17 ['qid']))
 #142
+u17 = unique(mumgp.filt.diag17 ['qid'])
+write.table (u17, file="/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_Chr17.txt", sep='\t', quote=FALSE, row.names=FALSE)
+
 
 #TOTAL SCAFFOLDS 3188 or 3205 with Chr00
 
@@ -1944,23 +2100,14 @@ panel.border = element_blank()) +
 dev.off()
  
 
+########################################################################################
 
+#This doesnt work!
+chromosomes= c(1,2,3,4,5,6,7,8,9)
 
-
-
-
-
-debug <- TRUE
-for(i in ls(pattern="mumgp.filt.diag*")) {
-   for (j in 1:17) 
-  tiffFile <- paste0(i, ".tiff")
-  chr <- paste0("Chr",j)
-  if(debug) print(tiffFile)
-  ## Now create tiff
-  tiff('tiffFile", width=18, height=20, units="cm",
-       pointsize=8, compression="lzw", bg="white", res=600)
-  
- ggplot(tiffFile, aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
+for(i in chromosomes) {
+  tiff(filename=paste0("Contigs_Canu_Chr_test", i,"tiff", width=18, height=20, units="cm",pointsize=8, compression="lzw", bg="white", res=600))
+  ggplot(filter(mumgp.filt.diag, rid == paste0("Chr0", i)), aes(x=rs, xend=re, y=qs, yend=qe, colour=strand)) +
   geom_segment(show.legend=FALSE) + geom_point(alpha=0.09) + theme_bw() + theme(strip.text.y.left = element_text(angle = 0))+ facet_grid(qid~., scales='free', space='free', switch='both') +
   guides(colour=guide_legend(override.aes=list(alpha=1))) + 
   theme(strip.text.y=element_text(angle=0, size=4),
@@ -1971,154 +2118,421 @@ for(i in ls(pattern="mumgp.filt.diag*")) {
         axis.text.y=element_blank(), axis.ticks.y=element_blank(),
         panel.spacing=unit(0, 'cm'),panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
 panel.border = element_blank()) +
-  xlab('chr') + ylab('assembly') + scale_colour_brewer(palette='Set1')
-  
-  dev.off()
-}
+  xlab(paste0("Chr",i)) + ylab('assembly') + scale_colour_brewer(palette='Set1')
+dev.off()
+  }
+
+
+
+
 ```
 
 
 
-
-```{bash, engine.opts='-l'}
-#Calculate the length of the all contigs minus those in Chr00 to see if they would be enough to get to the haploid genome
-
-# number of countings without countings those on Chr00
-grep -v "Chr00" i90_delta_9700.txt | awk '{print$2} | sort -u | wc -l 
-
-#4913 countig one line of header
-
-
-grep -v "Chr00" i90_delta_9700.txt |  awk '{print$2}' | sort -u > Rfiltered_contigs_i90_9700.txt
-
-# remove "" from previous file 
-sed 's/"tig/tig/' Rfiltered_contigs_i90_9700.txt | sed 's/"//' > mummerplot_contigs_i90_9700.txt
-
-#Then I opened with nano editor and removed the header
-
-grep -f mummerplot_contigs_i90_9700.txt ../Canu_X2250_raw_promethium.contigs.fasta | grep ">" > final_mummerplot_len_contigs_vs_GD_align_9700.txt
-
-Then I opened in excel and summed up column 2 (lenght of contigs) = 1249,254,555 ~ 1,2 Gb
-Those contigs with >=100 reads per contig account for 715 Mb so it is plenty to be sure we have a complete haploid genome at least
-
-```
-#Write the table to a text file for filtering by Chromosome so later the pictures can be easier to process
 ```{bash, engine.opts='-l'}
 
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/purge_haplotigs
 
+#number of primary KEEP contigs in purge haplotigs
+wc -l primary_contigs.txt
+#1760
+
+#Number of contigs in mummerplot R filtering
+wc -l ../nucmer/uniq_contigs_diag_ALL_chr.txt
+#3296
+
+#Number of contigs that were keep as primary contigs in purge_haplotigs that are also present in the mummerplot-filtering step
+
+fgrep -f ../nucmer/uniq_contigs_diag_ALL_chr.txt primary_contigs.txt | wc -l
+#1076
+fgrep -f primary_contigs.txt ../nucmer/uniq_contigs_diag_ALL_chr.txt | wc -l
+#1076
+
+
+#Number of contigs that were kept as primary contigs in purge_haplotigs that are NOT present in the mummerplot-filtering step
+
+fgrep -v -f ../nucmer/uniq_contigs_diag_ALL_chr.txt primary_contigs.txt | wc -l
+#684
+fgrep -v -f uniq_contigs_diag_ALL_chr.txt ../purge_haplotigs/primary_contigs.txt > primary_contigs_purge_haplotogs_not_in_mummerplot.txt 
+
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | wc -l 
+#215 contigs
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' > primary_plugs_haplotigs_not_nucmer_250Kb.txt
+
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | awk  '{sum += $2} END {print sum}' 
+#94,559,628 ~ 94 Mb
+
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' | wc -l 
+#315
+
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' > primary_plugs_haplotigs_not_nucmer_200Kb.txt
+
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' | awk  '{sum += $2} END {print sum}'
+#116,871,813 ~116Mb
+
+grep -f primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' | wc -l
+#422
+grep -f ../primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' > primary_plugs_haplotigs_not_nucmer_150Kb.txt
+
+grep -f primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' | awk  '{sum += $2} END {print sum}'
+#135,422,769
+
+
+grep -f primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' | wc -l
+#543
+
+grep -f primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' | awk  '{sum += $2} END {print sum}'
+#150,634,175 150 Mb
+
+grep -f primary_contigs_purge_haplotogs_not_in_mummerplot.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' > primary_plugs_haplotigs_not_nucmer_100Kb.txt
+
+#number of contigs that were included by nucmer but not by purge haplotigs 
+fgrep -v -f primary_contigs.txt ../nucmer/uniq_contigs_diag_ALL_chr.txt | wc -l
+#2220
+
+# how many contigs that got mapped (alignment higher than 20000) by nucmer method and filtering have a length higher than 250Kb
 cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
-delta=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/i90_delta_9700.txt
 
-for t in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 
-do
-grep Chr$t $delta > Chr$t'i90_delta_9700.txt'
+echo 'Number of scaffolds of length >250000'
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | wc -l 
+#882
+
+for k in  0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
+do 
+echo "Number of scaffolds with length >250Kb on 'Chr'$k"
+grep -f 'uniq_contigs_diag_Chr'$k'.txt' ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | wc -l 
 done
 
+
+#Calculate the total length of the assembly using these 904 contigs? 
+
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | awk  '{sum += $2} END {print sum}' 
+#679822577
+
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' | awk  '{sum += $2} END {print sum}'
+#733262088
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' | awk  '{sum += $2} END {print sum}'
+#814008733
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' | awk  '{sum += $2} END {print sum}'
+#924075228
+
 ```
-
-
-
-
-
-
-
-
-
-###MAP CANU CORRECTED READS TO GD #####################
+# BUSCO of the total contigs that were mapped with nucmer to GD and that are >= 150Kb, 200Kb and 250Kb 
 ```{bash, engine.opts='-l'}
 
-module load minimap2/2.9
+#Generate the fasta file with the contigs that are >= 150Kb, 200Kb and 250Kb
 module load samtools/1.9
 
-FQ=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
-mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
-map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
-input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+# We will use samtoold faidx
+# We need -r, --region-file FILE   File of regions.  Format is chr:from-to. One per line. so get first the file with the list of contigs and start end in that format
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' | wc -l 
+#882
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=250000) print$0}' > uniq_contigs_diag_250Kb.txt
+cat 
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' | wc -l 
+#1121
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=200000) print$0}' > uniq_contigs_diag_200Kb.txt
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' | wc -l 
+#1587
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=150000) print$0}' > uniq_contigs_diag_150Kb.txt
+
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' | wc -l 
+#2485
+grep -f uniq_contigs_diag_ALL_chr.txt ../Canu_X2250_raw_promethium.contigs.fasta | awk '{print$1,$2}' | sed 's/>//' | sed 's/len=//' | awk '{if($2>=100000) print$0}' > uniq_contigs_diag_100Kb.txt
+
+#PREPARE FILES TO EXTRACT FASTA SEQUENCES TO BE INPUT FILES FOR BUSCO:
+
+awk '{print $1":""1""-"$2}' uniq_contigs_diag_250Kb.txt > uniq_contigs_diag_250Kb_faidx.txt
+awk '{print $1":""1""-"$2}' uniq_contigs_diag_200Kb.txt > uniq_contigs_diag_200Kb_faidx.txt
+awk '{print $1":""1""-"$2}' uniq_contigs_diag_150Kb.txt > uniq_contigs_diag_150Kb_faidx.txt
+awk '{print $1":""1""-"$2}' uniq_contigs_diag_100Kb.txt > uniq_contigs_diag_100Kb_faidx.txt
+awk '{print $1":""1""-"$2}' primary_plugs_haplotigs_not_nucmer_250Kb.txt > primary_plugs_haplotigs_not_nucmer_250Kb_faidx.txt
+awk '{print $1":""1""-"$2}' primary_plugs_haplotigs_not_nucmer_200Kb.txt > primary_plugs_haplotigs_not_nucmer_200Kb_faidx.txt
+awk '{print $1":""1""-"$2}' primary_plugs_haplotigs_not_nucmer_150Kb.txt > primary_plugs_haplotigs_not_nucmer_150Kb_faidx.txt
+awk '{print $1":""1""-"$2}' primary_plugs_haplotigs_not_nucmer_100Kb.txt > primary_plugs_haplotigs_not_nucmer_100Kb_faidx.txt
+
+module load samtools/1.9
+samtools faidx -r uniq_contigs_diag_250Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > uniq_contigs_diag_250Kb.fasta
+samtools faidx -r uniq_contigs_diag_200Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > uniq_contigs_diag_200Kb.fasta
+samtools faidx -r uniq_contigs_diag_150Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > uniq_contigs_diag_150Kb.fasta
+samtools faidx -r uniq_contigs_diag_100Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > uniq_contigs_diag_100Kb.fasta
+samtools faidx -r primary_plugs_haplotigs_not_nucmer_250Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > purge_uniq_contigs_250Kb.fasta
+samtools faidx -r primary_plugs_haplotigs_not_nucmer_200Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > purge_uniq_contigs_200Kb.fasta
+samtools faidx -r primary_plugs_haplotigs_not_nucmer_150Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > purge_uniq_contigs_150Kb.fasta
+samtools faidx -r primary_plugs_haplotigs_not_nucmer_100Kb_faidx.txt ../Canu_X2250_raw_promethium.contigs.fasta > purge_uniq_contigs_100Kb.fasta
+
+```
+
+#First we do buscos just with contigs that are mapped by nucmer agaisnt GD, and then by adding those scaffolds in primary haplotigs taht are not in numcer plus nucmer haplotigs together
+
+# Combine these two files per Contig size
+
+```{bash, engine.opts='-l'}
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+cat uniq_contigs_diag_250Kb.fasta purge_uniq_contigs_250Kb.fasta > nucmer_purge_250kb.fasta
+cat uniq_contigs_diag_200Kb.fasta purge_uniq_contigs_200Kb.fasta > nucmer_purge_200kb.fasta
+cat uniq_contigs_diag_150Kb.fasta purge_uniq_contigs_250Kb.fasta > nucmer_purge_150kb.fasta
+cat uniq_contigs_diag_100Kb.fasta purge_uniq_contigs_250Kb.fasta > nucmer_purge_100kb.fasta
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer
+ #TOTAL CONTIGS COMBINED FILES
+grep ">" nucmer_purge_100kb.fasta | wc -l
+#2700
+grep ">" nucmer_purge_150kb.fasta | wc -l
+#1802
+grep ">" nucmer_purge_200kb.fasta | wc -l
+#1336
+grep ">" nucmer_purge_250kb.fasta | wc -l
+#1097
 
 
+```
+
+#BUSCO of assembly with contigs with lenght >250Kb, 200Kb and 150kb ####
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_250Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_250Kb.fasta
 
 
 bsub << EOF
 #!/bin/bash
-#BSUB -J minimap2_x2250
-#BSUB -o $map_dir/log/minimap2.out 
-#BSUB -e $map_dir/log/minimap2.err
-#BSUB -n 20
+#BSUB -J BUSCO_canu_X2250_250Kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
 #BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
 
-minimap2 -ax map-ont -t 20 $FQ $input | \
-samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
-samtools index $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam
-samtools depth $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam > $map_dir/canu_corr_X2250_reads_vs_GDDHV1.1.bam.coverage
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 5 -i $contigs_250Kb -o 250Kb_X2250 -l embryophyta_odb10 -m genome 
+
 
 EOF
 ```
-###IDENTIFY CONTIGS INTO GD## MAP CANU ASSEMBLY VS GD ###################
 
 ```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
 
-module load minimap2/2.9
-module load samtools/1.9
-
-ref=/input/genomic/plant/Malus/Genome/GDDH_v1.1/Decompress/GDDH13_1-1_formatted.fasta 
-map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
-input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
-
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_200Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_200Kb.fasta
 
 
 bsub << EOF
 #!/bin/bash
-#BSUB -J paf_x2250
-#BSUB -o $map_dir/log/minimap3.out 
-#BSUB -e $map_dir/log/minimap3.err
-#BSUB -n 20
+#BSUB -J BUSCO_canu_X2250_200Kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
 #BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
 
-#minimap2 -ax map-ont -t 20 $ref $input | \
-#samtools view -Su - | samtools sort - -o $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
-#samtools index $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam
-#samtools depth $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.bam.coverage
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 5 -i $contigs_200Kb -o 200Kb_X2250 -l embryophyta_odb10 -m genome 
 
 
-minimap2 -ax map-ont -t 20 $ref $input > $map_dir/X2250_canu_assembly_vs_GDDHV1.1.paf
 EOF
 ```
 
-
-
-
-
-
-
-
-
-
-###MAP CANU CORRECTED READS TO CANU ASSEMBLY #####################
 ```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
 
-module load minimap2/2.9
-module load samtools/1.9
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_150Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_150Kb.fasta
 
-FQ=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.contigs.fasta
-mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2/log
-map_dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/minimap2
-input=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/Canu_X2250_raw_promethium.correctedReads.fasta.gz
 
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_canu_X2250_150Kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 5 -i $contigs_150Kb -o 150Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_100Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_100Kb.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_canu_X2250_100Kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 5 -i $contigs_100Kb -o 100Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_250Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/uniq_contigs_diag_250Kb.fasta
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_canu_X2250_250Kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 5
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 5 -i $contigs_250Kb -o 250Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+# BUSCO with combined purge and nucmer data
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_250Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/nucmer_purge_250kb.fasta
 
 
 
 bsub << EOF
 #!/bin/bash
-#BSUB -J minimap2_x2250_asembly
-#BSUB -o $map_dir/log/minimap_assembly.out 
-#BSUB -e $map_dir/log/minimap_assembly.err
-#BSUB -n 20
+#BSUB -J BUSCO_purge_nucmer_250kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 10
 #BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
 
-minimap2 -ax map-ont -t 20 $FQ $input | \
-samtools view -Su - | samtools sort - -o $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
-samtools index $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam
-samtools depth $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam > $map_dir/canu_corr_X2250_reads_vs_Canu_assembly.bam.coverage
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 10 -i $contigs_250Kb -o purge_nucmer_250Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_200Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/nucmer_purge_200kb.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_purge_nucmer_200kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 10 -i $contigs_200Kb -o purge_nucmer_200Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_150Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/nucmer_purge_150kb.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_purge_nucmer_150kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 10 -i $contigs_150Kb -o purge_nucmer_150Kb_X2250 -l embryophyta_odb10 -m genome 
+
+
+EOF
+```
+
+```{bash, engine.opts='-l'}
+#https://busco.ezlab.org/list_of_lineages.html  embryophyta_odb10.2019-11-20	1614
+
+mkdir -p /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO/log
+dir=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/ncumer/BUSCO
+contigs_100Kb=/workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/nucmer_purge_100kb.fasta
+
+
+
+bsub << EOF
+#!/bin/bash
+#BSUB -J BUSCO_purge_nucmer_100kb
+#BSUB -o $dir/log/busco.out 
+#BSUB -e $dir/log/busco.err
+#BSUB -n 10
+#BSUB -R "span[hosts=1]"
+#BSUB -q "normal"
+
+module load BUSCO/v5.1.2
+
+cd /workspace/hrpelg/X2250_ONT/ANU_X2250/Guppy_basecalled_reads/04.canu/nucmer/BUSCO
+
+busco -c 10 -i $contigs_100Kb -o purge_nucmer_100Kb_X2250 -l embryophyta_odb10 -m genome 
+
 
 EOF
 ```
